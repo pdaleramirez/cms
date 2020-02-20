@@ -52,12 +52,12 @@ jobs:
       - name: Copy environment file
         run: cp tests/.env.github.${{ matrix.db }} tests/.env
       - name: Execute tests for PostgreSQL
-        if: contains(matrix.db, pgsql)
+        if: contains(matrix.db, 'pgsql')
         env:
           DB_DSN: ${{ matrix.db }}:host=${{ matrix.db }};port=${{ job.services.pgsql.ports[5432] }};dbname=craft-test
         run: vendor/bin/codecept run unit,functional
       - name: Execute tests for MySQL
-        if: contains(matrix.db, mysql)
+        if: contains(matrix.db, 'mysql')
         env:
           DB_DSN: ${{ matrix.db }}:host=${{ matrix.db }};port=${{ job.services.mysql.ports[3306] }};dbname=craft-test
         run: vendor/bin/codecept run unit,functional
