@@ -6,7 +6,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: ubuntu-latest
         php: [7.1, 7.2, 7.3, 7.4]
         db: [pgsql, mysql]
     services:
