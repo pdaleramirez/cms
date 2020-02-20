@@ -1,0 +1,64 @@
+name: tests
+on: [push, pull_requests]
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        php: [7.1, 7.2, 7.3, 7.4]
+        db: [pgsql, mysql]
+    services:
+      pgsql:
+        image: postgres:9.6
+        env:
+          POSTGRES_USER: craftcms
+          POSTGRES_DB: craft-test
+        ports:
+          - 5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: false
+          MYSQL_ROOT_PASSWORD: SomeRootPassword1!
+          MYSQL_DATABASE: craft-test
+          MYSQL_USER: craftcms
+        ports:
+          - 3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+    name: php${{ matrix.php }}-${{ matrix.os }}-${{ matrix.db }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v1
+      - name: Cache dependencies
+        uses: actions/cache@v1
+        env:
+          DB_DSN: ${{ matrix.db }}://craftcms:Password1!@${{ matrix.db }}:3306/craft-test
+        with:
+          path: ~/.composer/cache/files
+          key: dependencies-php-${{ matrix.php }}-composer-${{ hashFiles('composer.json') }}
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v1
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, bcmath, soap, intl, gd, exif, iconv, imagick
+          tools: codeception, composer
+      - name: Validate composer
+        run: composer validate
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-suggest --no-ansi
+      - name: Copy environment file
+        run: cp tests/.env.github.${{ matrix.db }} tests/.env
+      - name: Execute tests for PostgreSQL
+        if: matrix.db == pgsql
+        env:
+          DB_DSN: ${{ matrix.db }}:host=${{ matrix.db }};port=${{ job.services.pgsql.ports[5432] }};dbname=craft-test
+        run: vendor/bin/codecept run unit,functional
+      - name: Execute tests for MySQL
+        if: matrix.db == mysql
+        env:
+          DB_DSN: ${{ matrix.db }}:host=${{ matrix.db }};port=${{ job.services.mysql.ports[3306] }};dbname=craft-test
+        run: vendor/bin/codecept run unit,functional
+
