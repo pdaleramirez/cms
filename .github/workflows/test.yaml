@@ -10,11 +10,12 @@ jobs:
         php: [7.1, 7.2, 7.3, 7.4]
         db: [pgsql, mysql]
     services:
-      pgsql:
+      postgres:
         image: postgres:9.6
         env:
           POSTGRES_USER: craftcms
           POSTGRES_DB: craft-test
+          POSTGRES_PASSWORD: Password1!
         ports:
           - 5432
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
@@ -22,9 +23,8 @@ jobs:
         image: mysql:5.7
         env:
           MYSQL_ALLOW_EMPTY_PASSWORD: false
-          MYSQL_ROOT_PASSWORD: SomeRootPassword1!
+          MYSQL_ROOT_PASSWORD: Password1!
           MYSQL_DATABASE: craft-test
-          MYSQL_USER: craftcms
         ports:
           - 3306
         options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
@@ -43,7 +43,7 @@ jobs:
         uses: shivammathur/setup-php@v1
         with:
           php-version: ${{ matrix.php }}
-          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, bcmath, soap, intl, gd, exif, iconv, imagick
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, pdo_pgsql, pdo_mysql, bcmath, soap, intl, gd, exif, iconv, imagick
           tools: codeception, composer
       - name: Validate composer
         run: composer validate
@@ -52,13 +52,15 @@ jobs:
       - name: Copy environment file
         run: cp tests/.env.github.${{ matrix.db }} tests/.env
       - name: Execute tests for PostgreSQL
-        if: contains(matrix.db, 'pgsql')
+        if: contains(matrix.db, 'postgres')
         env:
-          DB_DSN: ${{ matrix.db }}:host=${{ matrix.db }};port=${{ job.services.pgsql.ports[5432] }};dbname=craft-test
+          DB_DSN: ${{ matrix.db }}:host=${{ matrix.db }};port=${{ job.services.postgres.ports[5432] }};dbname=craft-test
+          DB_PASSWORD: Password1!
         run: vendor/bin/codecept run unit,functional
       - name: Execute tests for MySQL
         if: contains(matrix.db, 'mysql')
         env:
           DB_DSN: ${{ matrix.db }}:host=${{ matrix.db }};port=${{ job.services.mysql.ports[3306] }};dbname=craft-test
+          DB_PASSWORD: Password1!
         run: vendor/bin/codecept run unit,functional
 
