@@ -1873,4 +1873,17 @@ class Asset extends Element
         $this->newLocation = null;
         $this->tempFilePath = null;
     }
+
+    /**
+     * @inheritdoc
+     */
+    public function getSupportedSites(): array
+    {
+        $sites[] = [
+            'siteId' => $this->siteId,
+            'enabledByDefault' => 1
+        ];
+
+        return $sites;
+    }
 }
