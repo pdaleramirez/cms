@@ -619,7 +619,7 @@ class UrlHelper
         if ($showScriptName) {
             if ($request->getIsConsoleRequest()) {
                 // No way to know for sure, so just guess
-                $baseUrl = '/' . $request->getScriptFilename();
+                $baseUrl = '/index.php';
             } else {
                 $baseUrl = static::host() . $request->getScriptUrl();
             }
@@ -654,9 +654,8 @@ class UrlHelper
 
             if ($path) {
                 // Prepend it to the params array
-                $pathParam = $generalConfig->pathParam;
-                ArrayHelper::remove($params, $pathParam);
-                $params = array_merge([$pathParam => $path], $params);
+                ArrayHelper::remove($params, $generalConfig->pathParam);
+                $params = array_merge([$generalConfig->pathParam => $path], $params);
             }
         }
 

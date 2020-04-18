@@ -37,6 +37,7 @@ use craft\services\ProjectConfig;
 use craft\services\Sections;
 use craft\services\Security;
 use craft\services\Sites;
+use craft\services\Structures;
 use craft\services\Tags;
 use craft\services\UserGroups;
 use craft\services\Users;
@@ -46,6 +47,7 @@ use craft\web\AssetManager;
 use craft\web\Request as WebRequest;
 use craft\web\View;
 use yii\base\Application;
+use yii\base\ErrorHandler;
 use yii\base\Event;
 use yii\base\Exception;
 use yii\base\InvalidConfigException;
@@ -262,10 +264,16 @@ trait ApplicationTrait
     /**
      * Returns whether Craft is installed.
      *
+     * @param bool $refresh
      * @return bool
      */
-    public function getIsInstalled(): bool
+    public function getIsInstalled(bool $refresh = false): bool
     {
+        if ($refresh) {
+            $this->_isInstalled = null;
+            $this->_info = null;
+        }
+
         if ($this->_isInstalled !== null) {
             return $this->_isInstalled;
         }
@@ -277,6 +285,10 @@ trait ApplicationTrait
         try {
             $info = $this->getInfo(true);
         } catch (DbException $e) {
+            Craft::error('There was a problem fetching the info row: ' . $e->getMessage(), __METHOD__);
+            /** @var ErrorHandler $errorHandler */
+            $errorHandler = $this->getErrorHandler();
+            $errorHandler->logException($e);
             return $this->_isInstalled = false;
         }
 
@@ -688,32 +700,35 @@ trait ApplicationTrait
      * Updates the info row.
      *
      * @param Info $info
+     * @param string[]|null $attributeNames The attributes to save
      * @return bool
      */
-    public function saveInfo(Info $info): bool
+    public function saveInfo(Info $info, array $attributeNames = null): bool
     {
         /** @var WebApplication|ConsoleApplication $this */
-        if (!$info->validate()) {
+
+        if ($attributeNames === null) {
+            $attributeNames = ['version', 'schemaVersion', 'maintenance', 'configMap', 'fieldVersion'];
+        }
+
+        if (!$info->validate($attributeNames)) {
             return false;
         }
 
-        $attributes = [
-            'version' => $info->version,
-            'schemaVersion' => $info->schemaVersion,
-            'maintenance' => $info->maintenance,
-            'configMap' => Db::prepareValueForDb($info->configMap),
-            'fieldVersion' => $info->fieldVersion,
-        ];
+        $attributes = $info->getAttributes($attributeNames);
 
         // TODO: Remove this after the next breakpoint
         if (version_compare($info['version'], '3.1', '<')) {
             unset($attributes['config'], $attributes['configMap']);
         }
 
-
         // TODO: Remove this after the next breakpoint
         if (version_compare($info['version'], '3.0', '<')) {
             unset($attributes['fieldVersion']);
+        }
+
+        if (isset($attributes['configMap'])) {
+            $attributes['configMap'] = Db::prepareValueForDb($attributes['configMap']);
         }
 
         $infoRowExists = (new Query())
@@ -779,16 +794,24 @@ trait ApplicationTrait
     public function getIsDbConnectionValid(): bool
     {
         /** @var WebApplication|ConsoleApplication $this */
+        $e = null;
         try {
             $this->getDb()->open();
-            return true;
         } catch (DbConnectException $e) {
-            Craft::error('There was a problem connecting to the database: ' . $e->getMessage(), __METHOD__);
-            return false;
+            // throw it later
         } catch (InvalidConfigException $e) {
+            // throw it later
+        }
+
+        if ($e !== null) {
             Craft::error('There was a problem connecting to the database: ' . $e->getMessage(), __METHOD__);
+            /** @var ErrorHandler $errorHandler */
+            $errorHandler = $this->getErrorHandler();
+            $errorHandler->logException($e);
             return false;
         }
+
+        return true;
     }
 
     // Service Getters
@@ -1352,6 +1375,9 @@ trait ApplicationTrait
      */
     private function _preInit()
     {
+        // Load the request before anything else, so everything else can safely check Craft::$app->has('request', true)
+        // to avoid possible recursive fatal errors in the request initialization
+        $this->getRequest();
         $this->getLog();
 
         // Set the timezone
@@ -1478,6 +1504,7 @@ trait ApplicationTrait
         $this->getProjectConfig()->on(ProjectConfig::EVENT_AFTER_APPLY_CHANGES, $invalidate);
         $this->getElements()->on(Elements::EVENT_AFTER_SAVE_ELEMENT, $invalidate);
         $this->getElements()->on(Elements::EVENT_AFTER_DELETE_ELEMENT, $invalidate);
+        $this->getStructures()->on(Structures::EVENT_AFTER_MOVE_ELEMENT, $invalidate);
     }
 
     /**

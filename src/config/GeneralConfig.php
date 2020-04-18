@@ -148,6 +148,10 @@ class GeneralConfig extends BaseObject
     public $cacheDuration = 86400;
     /**
      * @var bool Whether uploaded filenames with non-ASCII characters should be converted to ASCII (i.e. `ñ` → `n`).
+     *
+     * ::: tip
+     * You can run `./craft utils/ascii-filenames` in your terminal to apply ASCII filenames to all existing assets.
+     * :::
      */
     public $convertFilenamesToAscii = false;
     /**
@@ -577,10 +581,10 @@ class GeneralConfig extends BaseObject
      */
     public $postLogoutRedirect = '';
     /**
-     * @var bool Whether CMYK should be preserved as the colorspace when when manipulating images.
+     * @var bool Whether CMYK should be preserved as the colorspace when manipulating images.
      *
-     * Setting this to `true` will prevent Craft from transforming CMYK images to sRGB, but on some ImageMagick versions can cause color
-     * distortion in the image. This will only have effect if ImageMagick is in use.
+     * Setting this to `true` will prevent Craft from transforming CMYK images to sRGB, but on some ImageMagick versions
+     * it can cause color distortion in the image. This will only have effect if ImageMagick is in use.
      *
      * @since 3.0.8
      */
@@ -721,7 +725,7 @@ class GeneralConfig extends BaseObject
      *
      * This can be set to `'Lax'`, `'Strict'`, or `null`.
      *
-     * ::: note
+     * ::: tip
      * This setting requires PHP 7.3 or later.
      * :::
      *
@@ -870,7 +874,8 @@ class GeneralConfig extends BaseObject
      */
     public $upscaleImages = true;
     /**
-     * @var bool Whether Craft should use compressed JavaScript files whenever possible.
+     * @var bool Whether Craft should include minified JavaScript files whenever possible, and minify JavaScript code
+     * passed to [[\craft\web\View::includeJs()]] or `{% js %}` Twig tags.
      */
     public $useCompressedJs = true;
     /**

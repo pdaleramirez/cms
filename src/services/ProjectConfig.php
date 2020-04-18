@@ -429,6 +429,8 @@ class ProjectConfig extends Component
             $value = ProjectConfigHelper::cleanupConfig($value);
         }
 
+        $valueChanged = false;
+
         if ($value !== $this->get($path)) {
             if ($this->readOnly) {
                 // If we're applying yaml changes that are coming in via `project.yaml`, anyway, bail silently.
@@ -443,6 +445,8 @@ class ProjectConfig extends Component
                 $this->_timestampUpdated = true;
                 $this->set('dateModified', DateTimeHelper::currentTimeStamp(), 'Update timestamp for project config');
             }
+
+            $valueChanged = true;
         }
 
         // Mark this path (and its parent paths) as being processed, and store their current values
@@ -476,7 +480,12 @@ class ProjectConfig extends Component
         }
 
         $this->_traverseDataArray($config, $path, $value, $value === null);
-        $this->_saveConfig($config, $targetFilePath);
+
+        // Save config only if something actually changed.
+        if ($valueChanged) {
+            $this->_saveConfig($config, $targetFilePath);
+        }
+
         $this->processConfigChanges($path, true, $message);
     }
 
@@ -518,6 +527,9 @@ class ProjectConfig extends Component
         if (!$mutex->acquire($lockName, 15)) {
             throw new Exception('Could not acquire a lock for the syncing project config.');
         }
+
+        // Disable read/write splitting for the remainder of this request
+        Craft::$app->getDb()->enableSlaves = false;
 
         $this->_applyingYamlChanges = true;
         Craft::$app->getCache()->delete(self::CACHE_KEY);
@@ -828,8 +840,6 @@ class ProjectConfig extends Component
             }
         }
 
-        $info = Craft::$app->getInfo();
-
         if ($this->_updateConfigMap && $this->_useConfigFile()) {
             $configMap = $this->_generateConfigMap();
 
@@ -837,10 +847,10 @@ class ProjectConfig extends Component
                 $filePath = Craft::alias($filePath);
             }
 
+            $info = Craft::$app->getInfo();
             $info->configMap = Json::encode($configMap);
+            Craft::$app->saveInfoAfterRequest();
         }
-
-        Craft::$app->saveInfoAfterRequest();
     }
 
     /**

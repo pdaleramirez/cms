@@ -10,7 +10,7 @@ function _arrayWithoutHoles(arr) { if (Array.isArray(arr)) { for (var i = 0, arr
 
 function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "function" && typeof Symbol.iterator === "symbol") { _typeof = function _typeof(obj) { return typeof obj; }; } else { _typeof = function _typeof(obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; }; } return _typeof(obj); }
 
-/*!   - 2020-02-21 */
+/*!   - 2020-04-08 */
 (function ($) {
   /** global: Craft */
 
@@ -646,7 +646,9 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
         options = options ? $.extend({}, options) : {};
         options.method = method;
         options.url = Craft.getActionUrl(action);
-        options.headers = $.extend({}, options.headers || {}, _this2._actionHeaders());
+        options.headers = $.extend({
+          'X-Requested-With': 'XMLHttpRequest'
+        }, options.headers || {}, _this2._actionHeaders());
         options.params = $.extend({}, options.params || {}, {
           // Force Safari to not load from cache
           v: new Date().getTime()
@@ -2807,6 +2809,7 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
 
 
       var viewParams = this.getViewParams();
+      actionParams = actionParams ? Craft.expandPostArray(actionParams) : {};
       var params = $.extend(viewParams, actionParams, {
         elementAction: actionClass,
         elementIds: selectedElementIds
@@ -4482,8 +4485,10 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
         }
       }
 
-      $elements.find('.delete').on('click', $.proxy(function (ev) {
-        this.removeElement($(ev.currentTarget).closest('.element'));
+      $elements.find('.delete').on('click dblclick', $.proxy(function (ev) {
+        this.removeElement($(ev.currentTarget).closest('.element')); // Prevent this from acting as one of a double-click
+
+        ev.stopPropagation();
       }, this));
       this.$elements = this.$elements.add($elements);
       this.updateAddElementsBtn();
@@ -5839,7 +5844,7 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
      */
     _handleConstraintClick: function _handleConstraintClick(ev) {
       var constraint = $(ev.currentTarget).data('constraint');
-      $target = $(ev.currentTarget);
+      var $target = $(ev.currentTarget);
       $target.siblings().removeClass('active');
       $target.addClass('active');
 
@@ -12702,10 +12707,8 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
 
       if (this.settings.revisionId) {
         return;
-      } // Store the initial form value
+      } // Override the serializer to use our own
 
-
-      this.lastSerializedValue = this.serializeForm(true); // Override the serializer to use our own
 
       Craft.cp.$primaryForm.data('serializer', function () {
         return this.serializeForm(true);
@@ -13079,7 +13082,7 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
 
       var data = this.serializeForm(true);
 
-      if (force || data !== this.lastSerializedValue) {
+      if (force || data !== (this.lastSerializedValue || Craft.cp.$primaryForm.data('initialSerializedValue'))) {
         this.saveDraft(data);
       }
     },
@@ -13206,10 +13209,10 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
                 }).insertAfter($draftHeading);
               }
 
-              var $draftLi = $('<li/>').appendTo($draftsUl);
+              var $draftLi = $('<li/>').prependTo($draftsUl);
               var $draftA = $('<a/>', {
                 'class': 'sel',
-                html: '<span class="draft-name"></span> <span class="draft-creator light"></span>'
+                html: '<span class="draft-name"></span> <span class="draft-meta light"></span>'
               }).appendTo($draftLi);
               revisionMenu.addOptions($draftA);
               revisionMenu.selectOption($draftA); // Update the site URLs
@@ -13227,9 +13230,7 @@ function _typeof(obj) { "@babel/helpers - typeof"; if (typeof Symbol === "functi
 
           if (revisionMenu) {
             revisionMenu.$options.filter('.sel').find('.draft-name').text(response.draftName);
-            revisionMenu.$options.filter('.sel').find('.draft-creator').text(Craft.t('app', 'by {creator}', {
-              creator: response.creator
-            }));
+            revisionMenu.$options.filter('.sel').find('.draft-meta').text("\u2013 ".concat(response.timestamp) + (response.creator ? ", ".concat(response.creator) : ''));
           } // Did the controller send us updated preview targets?
 
 

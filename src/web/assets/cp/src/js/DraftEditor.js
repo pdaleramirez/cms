@@ -69,9 +69,6 @@ Craft.DraftEditor = Garnish.Base.extend(
                 return;
             }
 
-            // Store the initial form value
-            this.lastSerializedValue = this.serializeForm(true);
-
             // Override the serializer to use our own
             Craft.cp.$primaryForm.data('serializer', function() {
                 return this.serializeForm(true)
@@ -478,7 +475,7 @@ Craft.DraftEditor = Garnish.Base.extend(
 
             // Has anything changed?
             var data = this.serializeForm(true);
-            if (force || data !== this.lastSerializedValue) {
+            if (force || data !== (this.lastSerializedValue || Craft.cp.$primaryForm.data('initialSerializedValue'))) {
                 this.saveDraft(data);
             }
         },
@@ -609,10 +606,10 @@ Craft.DraftEditor = Garnish.Base.extend(
                                     'class': 'padded revision-group-drafts',
                                 }).insertAfter($draftHeading);
                             }
-                            var $draftLi = $('<li/>').appendTo($draftsUl);
+                            var $draftLi = $('<li/>').prependTo($draftsUl);
                             var $draftA = $('<a/>', {
                                 'class': 'sel',
-                                html: '<span class="draft-name"></span> <span class="draft-creator light"></span>',
+                                html: '<span class="draft-name"></span> <span class="draft-meta light"></span>',
                             }).appendTo($draftLi);
                             revisionMenu.addOptions($draftA);
                             revisionMenu.selectOption($draftA);
@@ -628,9 +625,7 @@ Craft.DraftEditor = Garnish.Base.extend(
 
                     if (revisionMenu) {
                         revisionMenu.$options.filter('.sel').find('.draft-name').text(response.draftName);
-                        revisionMenu.$options.filter('.sel').find('.draft-creator').text(Craft.t('app', 'by {creator}', {
-                            creator: response.creator
-                        }));
+                        revisionMenu.$options.filter('.sel').find('.draft-meta').text(`– ${response.timestamp}` + (response.creator ? `, ${response.creator}` : ''));
                     }
 
                     // Did the controller send us updated preview targets?

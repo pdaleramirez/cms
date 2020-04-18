@@ -15,9 +15,11 @@ use craft\db\Connection;
 use craft\db\Table;
 use craft\errors\DbConnectException;
 use craft\helpers\App;
+use craft\helpers\ArrayHelper;
 use craft\helpers\Console;
 use craft\helpers\FileHelper;
 use craft\helpers\StringHelper;
+use craft\migrations\CreateDbCacheTable;
 use craft\migrations\CreatePhpSessionTable;
 use Seld\CliPrompt\CliPrompt;
 use yii\base\InvalidConfigException;
@@ -105,7 +107,7 @@ class SetupController extends Controller
 
         $this->run('db-creds');
 
-        if (Craft::$app->getIsInstalled()) {
+        if (Craft::$app->getIsInstalled(true)) {
             $this->stdout("It looks like Craft is already installed, so we're done here." . PHP_EOL, Console::FG_YELLOW);
             return ExitCode::OK;
         }
@@ -291,8 +293,9 @@ EOD;
         $dbConfig->schema = $this->schema;
         $dbConfig->tablePrefix = $this->tablePrefix;
 
-        /** @var Connection $db */
-        $db = Craft::createObject(App::dbConfig($dbConfig));
+        $db = Craft::$app->getDb();
+        $db->close();
+        Craft::configure($db, ArrayHelper::without(App::dbConfig($dbConfig), 'class'));
 
         try {
             $db->open();
@@ -345,7 +348,6 @@ EOD;
             goto top;
         }
 
-        Craft::$app->set('db', $db);
         Craft::$app->setIsInstalled(null);
 
         $this->stdout('success!' . PHP_EOL, Console::FG_GREEN);
@@ -395,6 +397,29 @@ EOD;
         }
 
         $this->stdout('The `phpsessions` table was created successfully.' . PHP_EOL . PHP_EOL, Console::FG_GREEN);
+        return ExitCode::OK;
+    }
+
+    /**
+     * Creates a database table for storing DB caches.
+     *
+     * @return int
+     * @since 3.4.14
+     */
+    public function actionDbCacheTable(): int
+    {
+        if (Craft::$app->getDb()->tableExists(Table::CACHE)) {
+            $this->stdout('The `cache` table already exists.' . PHP_EOL . PHP_EOL, Console::FG_YELLOW);
+            return ExitCode::OK;
+        }
+
+        $migration = new CreateDbCacheTable();
+        if ($migration->up() === false) {
+            $this->stderr('An error occurred while creating the `cache` table.' . PHP_EOL . PHP_EOL, Console::FG_RED);
+            return ExitCode::UNSPECIFIED_ERROR;
+        }
+
+        $this->stdout('The `cache` table was created successfully.' . PHP_EOL . PHP_EOL, Console::FG_GREEN);
         return ExitCode::OK;
     }
 

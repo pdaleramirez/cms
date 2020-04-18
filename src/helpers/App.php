@@ -8,6 +8,7 @@
 namespace craft\helpers;
 
 use Craft;
+use craft\behaviors\SessionBehavior;
 use craft\config\DbConfig;
 use craft\db\Command;
 use craft\db\Connection;
@@ -569,6 +570,7 @@ class App
 
         return [
             'class' => Session::class,
+            'as session' => SessionBehavior::class,
             'flashParam' => $stateKeyPrefix . '__flash',
             'authAccessParam' => $stateKeyPrefix . '__auth_access',
             'name' => Craft::$app->getConfig()->getGeneral()->phpSessionName,
@@ -690,7 +692,11 @@ class App
         ];
 
         // Default to JSON responses if running in headless mode
-        if (Craft::$app->getRequest()->getIsSiteRequest() && Craft::$app->getConfig()->getGeneral()->headlessMode) {
+        if (
+            Craft::$app->has('request', true) &&
+            Craft::$app->getRequest()->getIsSiteRequest() &&
+            Craft::$app->getConfig()->getGeneral()->headlessMode
+        ) {
             $config['format'] = WebResponse::FORMAT_JSON;
         }
 
