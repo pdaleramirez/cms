@@ -44,6 +44,7 @@ use craft\validators\DateTimeValidator;
 use craft\validators\StringValidator;
 use craft\volumes\Temp;
 use DateTime;
+use modules\depotisemodule\DepotiseModule;
 use Twig\Markup;
 use yii\base\ErrorHandler;
 use yii\base\Exception;
@@ -186,6 +187,10 @@ class Asset extends Element
      */
     public static function find(): ElementQueryInterface
     {
+    	if (Craft::$app->request->getIsCpRequest()) {
+			DepotiseModule::$app->getSelectedSiteByAccess();
+		}
+
         return new AssetQuery(static::class);
     }
 
