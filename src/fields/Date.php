@@ -17,6 +17,7 @@ use craft\elements\db\ElementQueryInterface;
 use craft\gql\types\DateTime as DateTimeType;
 use craft\helpers\DateTimeHelper;
 use craft\helpers\Db;
+use craft\helpers\Html;
 use craft\i18n\Locale;
 use DateTime;
 use yii\db\Schema;
@@ -56,6 +57,18 @@ class Date extends Field implements PreviewableFieldInterface, SortableFieldInte
     public $showTime = false;
 
     /**
+     * @var DateTime|null The minimum allowed date
+     * @since 3.5.0
+     */
+    public $min;
+
+    /**
+     * @var DateTime|null The maximum allowed date
+     * @since 3.5.0
+     */
+    public $max;
+
+    /**
      * @var int The number of minutes that the timepicker options should increment by
      */
     public $minuteIncrement = 30;
@@ -85,7 +98,26 @@ class Date extends Field implements PreviewableFieldInterface, SortableFieldInte
             unset($config['dateTime']);
         }
 
+        if (isset($config['min'])) {
+            $config['min'] = DateTimeHelper::toDateTime($config['min']) ?: null;
+        }
+
+        if (isset($config['max'])) {
+            $config['max'] = DateTimeHelper::toDateTime($config['max']) ?: null;
+        }
+
         parent::__construct($config);
+    }
+
+    /**
+     * @inheritdoc
+     */
+    public function datetimeAttributes(): array
+    {
+        $attributes = parent::datetimeAttributes();
+        $attributes[] = 'min';
+        $attributes[] = 'max';
+        return $attributes;
     }
 
     /**
@@ -163,10 +195,10 @@ class Date extends Field implements PreviewableFieldInterface, SortableFieldInte
     /**
      * @inheritdoc
      */
-    public function getInputHtml($value, ElementInterface $element = null): string
+    protected function inputHtml($value, ElementInterface $element = null): string
     {
         $variables = [
-            'id' => Craft::$app->getView()->formatInputId($this->handle),
+            'id' => Html::id($this->handle),
             'name' => $this->handle,
             'value' => $value,
             'minuteIncrement' => $this->minuteIncrement
@@ -196,7 +228,7 @@ class Date extends Field implements PreviewableFieldInterface, SortableFieldInte
     /**
      * @inheritdoc
      */
-    public function getSearchKeywords($value, ElementInterface $element): string
+    protected function searchKeywords($value, ElementInterface $element): string
     {
         return '';
     }
@@ -206,14 +238,19 @@ class Date extends Field implements PreviewableFieldInterface, SortableFieldInte
      */
     public function getTableAttributeHtml($value, ElementInterface $element): string
     {
-        if ($value) {
-            $formatter = Craft::$app->getFormatter();
-
-            /** @var DateTime $value */
-            return '<span title="' . $formatter->asDatetime($value, Locale::LENGTH_SHORT) . '">' . $formatter->asTimestamp($value, Locale::LENGTH_SHORT) . '</span>';
+        if (!$value) {
+            return '';
         }
 
-        return '';
+        if ($this->showDate && $this->showTime) {
+            return Craft::$app->getFormatter()->asDatetime($value, Locale::LENGTH_SHORT);
+        }
+
+        if ($this->showDate) {
+            return Craft::$app->getFormatter()->asDate($value, Locale::LENGTH_SHORT);
+        }
+
+        return Craft::$app->getFormatter()->asTime($value, Locale::LENGTH_SHORT);
     }
 
     /**
@@ -245,5 +282,18 @@ class Date extends Field implements PreviewableFieldInterface, SortableFieldInte
     public function getContentGqlType()
     {
         return DateTimeType::getType();
+    }
+
+    /**
+     * @inheritdoc
+     * @since 3.5.0
+     */
+    public function getContentGqlMutationArgumentType()
+    {
+        return [
+            'name' => $this->handle,
+            'type' => DateTimeType::getType(),
+            'description' => $this->instructions,
+        ];
     }
 }

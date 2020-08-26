@@ -1,5 +1,14 @@
 /** global: Craft */
 /** global: Garnish */
+
+// Use old jQuery prefilter behavior
+// see https://jquery.com/upgrade-guide/3.5/
+var rxhtmlTag = /<(?!area|br|col|embed|hr|img|input|link|meta|param)(([a-z][^\/\0>\x20\t\r\n\f]*)[^>]*)\/>/gi;
+jQuery.htmlPrefilter = function( html ) {
+    return html.replace( rxhtmlTag, "<$1></$2>" );
+};
+
+
 // Set all the standard Craft.* stuff
 $.extend(Craft,
     {
@@ -350,7 +359,7 @@ $.extend(Craft,
             if (baseUrl) {
                 url = baseUrl;
 
-                if (path) {
+                if (path && Craft.pathParam) {
                     // Does baseUrl already contain a path?
                     var pathMatch = url.match(new RegExp('[&\?]' + Craft.escapeRegex(Craft.pathParam) + '=[^&]+'));
                     if (pathMatch) {
@@ -370,7 +379,7 @@ $.extend(Craft,
             }
 
             if (!Craft.omitScriptNameInUrls && path) {
-                if (Craft.usePathInfo) {
+                if (Craft.usePathInfo || !Craft.pathParam) {
                     // Make sure that the script name is in the URL
                     if (url.search(Craft.scriptName) === -1) {
                         url = Craft.rtrim(url, '/') + '/' + Craft.scriptName;
@@ -606,6 +615,8 @@ $.extend(Craft,
             });
         },
 
+        _processedApiHeaders: false,
+
         /**
          * Sends a request to the Craftnet API.
          * @param {string} method The request action to use ('GET' or 'POST')
@@ -617,31 +628,127 @@ $.extend(Craft,
         sendApiRequest: function(method, uri, options) {
             return new Promise((resolve, reject) => {
                 options = options ? $.extend({}, options) : {};
+                let cancelToken = options.cancelToken || null;
                 // Get the latest headers
-                this.sendActionRequest('POST', 'app/api-headers', {
-                    cancelToken: options.cancelToken || null,
-                }).then((headerResponse) => {
+                this.getApiHeaders(cancelToken).then(apiHeaders => {
                     options.method = method;
                     options.baseURL = Craft.baseApiUrl;
                     options.url = uri;
-                    options.headers = $.extend(headerResponse.data, options.headers || {});
+                    options.headers = $.extend(apiHeaders, options.headers || {});
                     options.params = $.extend(Craft.apiParams || {}, options.params || {}, {
                         // Force Safari to not load from cache
                         v: new Date().getTime(),
                     });
 
                     axios.request(options).then((apiResponse) => {
-                        this.sendActionRequest('POST', 'app/process-api-response-headers', {
-                            data: {
-                                headers: apiResponse.headers,
-                            },
-                            cancelToken: options.cancelToken || null,
-                        }).then(() => {
-                            resolve(apiResponse.data);
-                        }).catch(reject);
+                        // Send the API response back immediately
+                        resolve(apiResponse.data);
+
+                        if (!this._processedApiHeaders) {
+                            if (apiResponse.headers['x-craft-license-status']) {
+                                this._processedApiHeaders = true;
+                                this.sendActionRequest('POST', 'app/process-api-response-headers', {
+                                    data: {
+                                        headers: apiResponse.headers,
+                                    },
+                                    cancelToken: cancelToken,
+                                });
+
+                                // If we just got a new license key, set it and then resolve the header waitlist
+                                if (this._apiHeaders && this._apiHeaders['X-Craft-License'] === '__REQUEST__') {
+                                    this._apiHeaders['X-Craft-License'] = window.cmsLicenseKey = apiResponse.headers['x-craft-license'];
+                                    this._resolveHeaderWaitlist();
+                                }
+                            } else if (
+                                this._apiHeaders &&
+                                this._apiHeaders['X-Craft-License'] === '__REQUEST__' &&
+                                this._apiHeaderWaitlist.length
+                            ) {
+                                // The request didn't send headers. Go ahead and resolve the next request on the
+                                // header waitlist.
+                                this._apiHeaderWaitlist.shift()[0](this._apiHeaders);
+                            }
+                        }
                     }).catch(reject);
                 }).catch(reject);
             });
+        },
+
+        _loadingApiHeaders: false,
+        _apiHeaders: null,
+        _apiHeaderWaitlist: [],
+
+        /**
+         * Returns the headers that should be sent with API requests.
+         *
+         * @param {Object|null} cancelToken
+         * @return {Promise}
+         */
+        getApiHeaders: function(cancelToken) {
+            return new Promise((resolve, reject) => {
+                // Are we already loading them?
+                if (this._loadingApiHeaders) {
+                    this._apiHeaderWaitlist.push([resolve, reject]);
+                    return;
+                }
+
+                // Are the headers already cached?
+                if (this._apiHeaders) {
+                    resolve(this._apiHeaders);
+                    return;
+                }
+
+                this._loadingApiHeaders = true;
+                this.sendActionRequest('POST', 'app/api-headers', {
+                    cancelToken: cancelToken,
+                }).then(response => {
+                    // Make sure we even are waiting for these anymore
+                    if (!this._loadingApiHeaders) {
+                        reject(e);
+                        return;
+                    }
+
+                    this._apiHeaders = response.data;
+                    resolve(this._apiHeaders);
+
+                    // If we are requesting a new Craft license, hold off on
+                    // resolving other API requests until we have one
+                    if (response.data['X-Craft-License'] !== '__REQUEST__') {
+                        this._resolveHeaderWaitlist();
+                    }
+                }).catch(e => {
+                    this._loadingApiHeaders = false;
+                    reject(e)
+
+                    // Was anything else waiting for them?
+                    while (this._apiHeaderWaitlist.length) {
+                        this._apiHeaderWaitlist.shift()[1](e);
+                    }
+                });
+            });
+        },
+
+        _resolveHeaderWaitlist: function() {
+            this._loadingApiHeaders = false;
+
+            // Was anything else waiting for them?
+            while (this._apiHeaderWaitlist.length) {
+                this._apiHeaderWaitlist.shift()[0](this._apiHeaders);
+            }
+        },
+
+        /**
+         * Clears the cached API headers.
+         */
+        clearCachedApiHeaders: function() {
+            this._apiHeaders = null;
+            this._processedApiHeaders = false;
+            this._loadingApiHeaders = false;
+
+            // Reject anything in the header waitlist
+            while (this._apiHeaderWaitlist.length) {
+                this._apiHeaderWaitlist.shift()[1]();
+            }
         },
 
         /**
@@ -1233,7 +1340,7 @@ $.extend(Craft,
 
             for (var i = 0; i < str.length; i++) {
                 char = str.charAt(i);
-                asciiStr += (charMap || Craft.asciiCharMap)[char] || char;
+                asciiStr += typeof (charMap || Craft.asciiCharMap)[char] === 'string' ? (charMap || Craft.asciiCharMap)[char] : char;
             }
 
             return asciiStr;
@@ -1352,6 +1459,7 @@ $.extend(Craft,
             $('.pill', $container).pill();
             $('.formsubmit', $container).formsubmit();
             $('.menubtn', $container).menubtn();
+            $('.datetimewrapper', $container).datetime();
         },
 
         _elementIndexClasses: {},
@@ -1446,8 +1554,20 @@ $.extend(Craft,
          * @param {object} settings
          */
         createElementEditor: function(elementType, element, settings) {
-            var func;
+            // Param mapping
+            if (typeof settings === 'undefined' && $.isPlainObject(element)) {
+                // (settings)
+                settings = element;
+                element = null;
+            } else if (typeof settings !== 'object') {
+                settings = {};
+            }
 
+            if (!settings.elementType) {
+                settings.elementType = elementType;
+            }
+
+            var func;
             if (typeof this._elementEditorClasses[elementType] !== 'undefined') {
                 func = this._elementEditorClasses[elementType];
             } else {
@@ -1491,6 +1611,67 @@ $.extend(Craft,
                 } catch (e) {
                 }
             }
+        },
+
+        /**
+         * Removes a value from localStorage.
+         * @param key
+         */
+        removeLocalStorage: function(key) {
+            if (typeof localStorage !== 'undefined') {
+                localStorage.removeItem(`Craft-${Craft.systemUid}.${key}`);
+            }
+        },
+
+        /**
+         * Returns a cookie value, if it exists, otherwise returns `false`
+         * @return {(string|boolean)}
+         */
+        getCookie: function(name) {
+            // Adapted from https://developer.mozilla.org/en-US/docs/Web/API/Document/cookie
+            return document.cookie.replace(new RegExp(`(?:(?:^|.*;\\s*)Craft-${Craft.systemUid}:${name}\\s*\\=\\s*([^;]*).*$)|^.*$`), "$1");
+        },
+
+        /**
+         * Sets a cookie value.
+         * @param {string} name
+         * @param {string} value
+         * @param {Object} [options]
+         * @param {string} [options.path] The cookie path.
+         * @param {string} [options.domain] The cookie domain. Defaults to the `defaultCookieDomain` config setting.
+         * @param {number} [options.maxAge] The max age of the cookie (in seconds)
+         * @param {Date} [options.expires] The expiry date of the cookie. Defaults to none (session-based cookie).
+         * @param {boolean} [options.secure] Whether this is a secure cookie. Defaults to the `useSecureCookies`
+         * config setting.
+         * @param {string} [options.sameSite] The SameSite value (`lax` or `strict`). Defaults to the
+         * `sameSiteCookieValue` config setting.
+         */
+        setCookie: function(name, value, options) {
+            options = $.extend({}, this.defaultCookieOptions, options);
+            let cookie = `Craft-${Craft.systemUid}:${name}=${encodeURIComponent(value)}`;
+            if (options.path) {
+                cookie += `;path=${options.path}`;
+            }
+            if (options.domain) {
+                cookie += `;domain=${options.domain}`;
+            }
+            if (options.maxAge) {
+                cookie += `;max-age-in-seconds=${options.maxAge}`;
+            } else if (options.expires) {
+                cookie += `;expires=${options.expires.toUTCString()}`;
+            }
+            if (options.secure) {
+                cookie += ';secure';
+            }
+            document.cookie = cookie;
+        },
+
+        /**
+         * Removes a cookie
+         * @param {string} name
+         */
+        removeCookie: function(name) {
+            this.setCookie(name, '', new Date('1970-01-01T00:00:00'));
         },
 
         /**
@@ -1554,7 +1735,64 @@ $.extend(Craft,
                     elements: [$newImg[0]]
                 });
             }
-        }
+        },
+
+        /**
+         * Submits a form.
+         * @param {Object} $form
+         * @param {Object} [options]
+         * @param {string} [options.action] The `action` param value override
+         * @param {string} [options.redirect] The `redirect` param value override
+         * @param {string} [options.confirm] A confirmation message that should be shown to the user before submit
+         * @param {Object} [options.params] Additional params that should be added to the form, defined as name/value pairs
+         * @param {Object} [options.data] Additional data to be passed to the submit event
+         * @param {boolean} [options.retainScroll] Whether the scroll position should be stored and reapplied on the next page load
+         */
+        submitForm: function($form, options) {
+            if (typeof options === 'undefined') {
+                options = {};
+            }
+
+            if (options.confirm && !confirm(options.confirm)) {
+                return;
+            }
+
+            if (options.action) {
+                $('<input/>', {
+                    type: 'hidden',
+                    name: 'action',
+                    val: options.action,
+                })
+                    .appendTo($form);
+            }
+
+            if (options.redirect) {
+                $('<input/>', {
+                    type: 'hidden',
+                    name: 'redirect',
+                    val: options.redirect,
+                })
+                    .appendTo($form);
+            }
+
+            if (options.params) {
+                for (let name in options.params) {
+                    let value = options.params[name];
+                    $('<input/>', {
+                        type: 'hidden',
+                        name: name,
+                        val: value,
+                    })
+                        .appendTo($form);
+                }
+            }
+
+            if (options.retainScroll) {
+                this.setLocalStorage('scrollY', window.scrollY);
+            }
+
+            $form.trigger($.extend({type: 'submit'}, options.data));
+        },
     });
 
 
@@ -1730,42 +1968,24 @@ $.extend($.fn,
 
         formsubmit: function() {
             // Secondary form submit buttons
-            this.on('click', function(ev) {
-                var $btn = $(ev.currentTarget);
-
-                if ($btn.attr('data-confirm')) {
-                    if (!confirm($btn.attr('data-confirm'))) {
-                        return;
-                    }
-                }
-
-                var $anchor = $btn.data('menu') ? $btn.data('menu').$anchor : $btn;
-                var $form = $anchor.attr('data-form') ? $('#' + $anchor.attr('data-form')) : $anchor.closest('form');
-
-                if ($btn.data('action')) {
-                    $('<input type="hidden" name="action"/>')
-                        .val($btn.data('action'))
-                        .appendTo($form);
-                }
-
-                if ($btn.data('redirect')) {
-                    $('<input type="hidden" name="redirect"/>')
-                        .val($btn.data('redirect'))
-                        .appendTo($form);
-                }
-
+            return this.on('click', function(ev) {
+                let $btn = $(ev.currentTarget);
+                let params = $btn.data('params') || {};
                 if ($btn.data('param')) {
-                    $('<input type="hidden"/>')
-                        .attr({
-                            name: $btn.data('param'),
-                            value: $btn.data('value')
-                        })
-                        .appendTo($form);
+                    params[$btn.data('param')] = $btn.data('value');
                 }
 
-                $form.trigger({
-                    type: 'submit',
-                    customTrigger: $btn,
+                let $anchor = $btn.data('menu') ? $btn.data('menu').$anchor : $btn;
+                let $form = $anchor.attr('data-form') ? $('#' + $anchor.attr('data-form')) : $anchor.closest('form');
+
+                Craft.submitForm($form, {
+                    confirm: $btn.data('confirm'),
+                    action: $btn.data('action'),
+                    redirect: $btn.data('redirect'),
+                    params: params,
+                    data: {
+                        customTrigger: $btn,
+                    }
                 });
             });
         },
@@ -1784,7 +2004,43 @@ $.extend($.fn,
                     new Garnish.MenuBtn($btn, settings);
                 }
             });
-        }
+        },
+
+        datetime: function() {
+            return this.each(function() {
+                let $wrapper = $(this);
+                let $inputs = $wrapper.find('input:not([name$="[timezone]"])');
+                let checkValue = () => {
+                    let hasValue = false;
+                    for (let i = 0; i < $inputs.length; i++) {
+                        if ($inputs.eq(i).val()) {
+                            hasValue = true;
+                            break;
+                        }
+                    }
+                    if (hasValue) {
+                        if (!$wrapper.children('.clear-btn').length) {
+                            let $btn = $('<button/>', {
+                                type: 'button',
+                                class: 'clear-btn',
+                                title: Craft.t('app', 'Clear'),
+                            })
+                                .appendTo($wrapper)
+                                .on('click', () => {
+                                    for (let i = 0; i < $inputs.length; i++) {
+                                        $inputs.eq(i).val('');
+                                    }
+                                    $btn.remove();
+                                })
+                        }
+                    } else {
+                        $wrapper.children('.clear-btn').remove();
+                    }
+                };
+                $inputs.on('change', checkValue);
+                checkValue();
+            });
+        },
     });
 
 

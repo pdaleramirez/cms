@@ -8,10 +8,10 @@
 namespace craft\controllers;
 
 use Craft;
-use craft\base\Plugin;
 use craft\db\Table;
 use craft\errors\InvalidPluginException;
 use craft\helpers\ArrayHelper;
+use craft\helpers\Db;
 use craft\services\Plugins;
 use yii\base\NotSupportedException;
 use yii\web\Response;
@@ -49,8 +49,13 @@ class ConfigSyncController extends BaseUpdaterController
      */
     public function actionApplyYamlChanges(): Response
     {
-        Craft::$app->getProjectConfig()->applyYamlChanges();
+        $projectConfig = Craft::$app->getProjectConfig();
 
+        if (!empty($this->data['force'])) {
+            $projectConfig->forceUpdate = true;
+        }
+
+        $projectConfig->applyYamlChanges();
         return $this->sendFinished();
     }
 
@@ -79,12 +84,12 @@ class ConfigSyncController extends BaseUpdaterController
         try {
             Craft::$app->getPlugins()->uninstallPlugin($handle);
         } catch (\Throwable $e) {
-            Craft::warning('Could not uninstall plugin "' . $handle . '" that was removed from project.yaml: ' . $e->getMessage());
+            Craft::warning("Could not uninstall plugin \"$handle\" that was removed from your project config YAML files: " . $e->getMessage());
 
             // Just remove the row
-            Craft::$app->getDb()->createCommand()
-                ->delete(Table::PLUGINS, ['handle' => $handle])
-                ->execute();
+            Db::delete(Table::PLUGINS, [
+                'handle' => $handle,
+            ]);
         }
 
         return $this->sendNextAction($this->_nextApplyYamlAction());
@@ -135,7 +140,9 @@ class ConfigSyncController extends BaseUpdaterController
      */
     protected function initialData(): array
     {
-        $data = [];
+        $data = [
+            'force' => (bool)$this->request->getBodyParam('force'),
+        ];
 
         // Any plugins need to be installed/uninstalled?
         $projectConfig = Craft::$app->getProjectConfig();
@@ -145,7 +152,7 @@ class ConfigSyncController extends BaseUpdaterController
         $data['uninstallPlugins'] = array_diff($loadedConfigPlugins, $yamlPlugins);
 
         // Set the return URL, if any
-        if (($returnUrl = Craft::$app->getRequest()->getBodyParam('return')) !== null) {
+        if (($returnUrl = $this->request->getBodyParam('return')) !== null) {
             $data['returnUrl'] = strip_tags($returnUrl);
         }
 
@@ -158,10 +165,18 @@ class ConfigSyncController extends BaseUpdaterController
     protected function initialState(): array
     {
         $projectConfig = Craft::$app->getProjectConfig();
+        $badPlugins = [];
+
+        // Make sure schema required by config files aligns with what we have.
+        $issues = [];
+        if (!$projectConfig->getAreConfigSchemaVersionsCompatible($issues)) {
+            foreach ($issues as $issue) {
+                $badPlugins[] = "`{$issue['cause']}`";
+            }
+        }
 
         if (!empty($this->data['installPlugins'])) {
             $pluginsService = Craft::$app->getPlugins();
-            $badPlugins = [];
 
             // Make sure that all to-be-installed plugins actually exist,
             // and that they have the same schema as project.yaml
@@ -172,7 +187,6 @@ class ConfigSyncController extends BaseUpdaterController
                     $plugin = null;
                 }
 
-                /** @var Plugin|null $plugin */
                 if (
                     !$plugin ||
                     $plugin->schemaVersion != $projectConfig->get(Plugins::CONFIG_PLUGINS_KEY . '.' . $handle . '.schemaVersion', true)
@@ -180,19 +194,20 @@ class ConfigSyncController extends BaseUpdaterController
                     $badPlugins[] = "`{$handle}`";
                 }
             }
+        }
 
-            if (!empty($badPlugins)) {
-                $error = Craft::t('app', 'The following plugins are listed in `project.yaml`, but appear to be missing or installed at the wrong version:') .
-                    ' ' . implode(', ', $badPlugins) .
-                    "\n\n" . Craft::t('app', 'Try running `composer install` from your terminal to resolve.');
+        if (!empty($badPlugins)) {
+            $error = Craft::t('app', "The following plugins are listed in your project config YAML files, but appear to be missing or installed at the wrong version:") .
+                ' ' . implode(', ', $badPlugins) .
+                "\n\n" . Craft::t('app', 'Try running `composer install` from your terminal to resolve.');
 
-                return [
-                    'error' => $error,
-                    'options' => [
-                        $this->actionOption(Craft::t('app', 'Try again'), self::ACTION_RETRY, ['submit' => true]),
-                    ]
-                ];
-            }
+            return [
+                'error' => $error,
+                'options' => [
+                    $this->finishedState(['label' => Craft::t('app', 'Cancel')]),
+                    $this->actionOption(Craft::t('app', 'Try again'), self::ACTION_RETRY, ['submit' => true]),
+                ]
+            ];
         }
 
         // Is the loaded project config newer than project.yaml?
@@ -201,10 +216,12 @@ class ConfigSyncController extends BaseUpdaterController
 
         if ($configModifiedTime > $yamlModifiedTime) {
             return [
-                'error' => Craft::t('app', 'The loaded project config has more recent changes than `project.yaml`.'),
+                'error' => Craft::t('app', "The loaded project config has more recent changes than your project config YAML files."),
                 'options' => [
                     $this->actionOption(Craft::t('app', 'Use the loaded project config'), self::ACTION_REGENERATE_YAML, ['submit' => true]),
-                    $this->actionOption(Craft::t('app', 'Use project.yaml'), $this->_nextApplyYamlAction(), ['submit' => true]),
+                    $this->actionOption(Craft::t('app', 'Use YAML files'), $this->_nextApplyYamlAction(), [
+                        'submit' => true,
+                    ]),
                 ]
             ];
         }
@@ -237,9 +254,9 @@ class ConfigSyncController extends BaseUpdaterController
             case self::ACTION_RETRY:
                 return Craft::t('app', 'Trying again…');
             case self::ACTION_APPLY_YAML_CHANGES:
-                return Craft::t('app', 'Applying changes from the config file…');
+                return Craft::t('app', 'Applying changes from the project config YAML files…');
             case self::ACTION_REGENERATE_YAML:
-                return Craft::t('app', 'Regenerating `project.yaml` from the loaded project config…');
+                return Craft::t('app', 'Regenerating project config YAML files from the loaded project config…');
             case self::ACTION_UNINSTALL_PLUGIN:
                 $handle = ArrayHelper::firstValue($this->data['uninstallPlugins']);
                 return Craft::t('app', 'Uninstalling {name}', [

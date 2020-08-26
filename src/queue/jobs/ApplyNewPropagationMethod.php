@@ -8,11 +8,9 @@
 namespace craft\queue\jobs;
 
 use Craft;
-use craft\base\Element;
 use craft\base\ElementInterface;
-use craft\elements\MatrixBlock;
+use craft\errors\UnsupportedSiteException;
 use craft\events\BatchElementActionEvent;
-use craft\fields\Matrix;
 use craft\helpers\ArrayHelper;
 use craft\helpers\ElementHelper;
 use craft\queue\BaseJob;
@@ -44,16 +42,12 @@ class ApplyNewPropagationMethod extends BaseJob
      */
     public function execute($queue)
     {
-        // Let's save ourselves some trouble and just clear all the caches for this element class
-        Craft::$app->getTemplateCaches()->deleteCachesByElementType($this->elementType);
-
         /** @var string|ElementInterface $elementType */
         $elementType = $this->elementType;
         $query = $elementType::find()
             ->siteId('*')
             ->unique()
-            ->anyStatus()
-            ->orderBy(null);
+            ->anyStatus();
 
         if (!empty($this->criteria)) {
             Craft::configure($query, $this->criteria);
@@ -81,11 +75,11 @@ class ApplyNewPropagationMethod extends BaseJob
                 }
 
                 // Load the element in any sites that it's about to be deleted for
-                /** @var Element $element */
                 $element = $e->element;
                 $otherSiteElements = $elementType::find()
                     ->id($element->id)
                     ->siteId($otherSiteIds)
+                    ->structureId($element->structureId)
                     ->anyStatus()
                     ->orderBy(null)
                     ->indexBy('siteId')
@@ -94,8 +88,16 @@ class ApplyNewPropagationMethod extends BaseJob
                 // Duplicate those blocks so their content can live on
                 while (!empty($otherSiteElements)) {
                     $otherSiteElement = array_pop($otherSiteElements);
-                    /** @var Element $newElement */
-                    $newElement = $elementsService->duplicateElement($otherSiteElement);
+                    try {
+                        /** @var Element $newElement */
+                        $newElement = $elementsService->duplicateElement($otherSiteElement);
+                    } catch (UnsupportedSiteException $e) {
+                        // Just log it and move along
+                        Craft::warning("Unable to duplicate “{$otherSiteElement}” to site $otherSiteElement->siteId: " . $e->getMessage());
+                        Craft::$app->getErrorHandler()->logException($e);
+                        continue;
+                    }
+
                     // This may support more than just the site it was saved in
                     $newElementSiteIds = ArrayHelper::getColumn(ElementHelper::supportedSitesForElement($newElement), 'siteId');
                     foreach ($newElementSiteIds as $newBlockSiteId) {

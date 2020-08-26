@@ -8,17 +8,17 @@
 namespace craft\helpers;
 
 use Craft;
-use craft\base\Element;
-use craft\base\ElementInterface;
 use craft\db\Paginator;
 use craft\i18n\Locale;
 use craft\web\twig\variables\Paginate;
+use craft\web\View;
 use Twig\Environment;
 use Twig\Error\RuntimeError;
 use Twig\Markup;
 use Twig\Source;
 use Twig\Template as TwigTemplate;
 use yii\base\BaseObject;
+use yii\base\InvalidConfigException;
 use yii\base\UnknownMethodException;
 use yii\db\Query;
 use yii\db\QueryInterface;
@@ -68,10 +68,6 @@ class Template
      */
     public static function attribute(Environment $env, Source $source, $object, $item, array $arguments = [], string $type = TwigTemplate::ANY_CALL, bool $isDefinedTest = false, bool $ignoreStrictCheck = false)
     {
-        if ($object instanceof ElementInterface) {
-            self::_includeElementInTemplateCaches($object);
-        }
-
         if (
             $type !== TwigTemplate::METHOD_CALL &&
             $object instanceof BaseObject &&
@@ -212,22 +208,6 @@ class Template
     }
 
     /**
-     * Includes an element in any active template caches.
-     *
-     * @param ElementInterface $element
-     */
-    private static function _includeElementInTemplateCaches(ElementInterface $element)
-    {
-        /** @var Element $element */
-        $elementId = $element->id;
-
-        // Don't initialize the TemplateCaches service if we don't have to
-        if ($elementId && Craft::$app->has('templateCaches', true)) {
-            Craft::$app->getTemplateCaches()->includeElementInTemplateCaches($elementId);
-        }
-    }
-
-    /**
      * Adds (deprecated) support for the old Craft\DateTime methods.
      *
      * @param \DateTime $object
@@ -328,5 +308,48 @@ class Template
         Craft::$app->getDeprecator()->log($key, $message);
         /** @noinspection PhpUndefinedVariableInspection */
         return $value;
+    }
+
+    /**
+     * Registers a CSS file or a CSS code block.
+     *
+     * @param string $css the CSS file URL, or the content of the CSS code block to be registered
+     * @param array $options the HTML attributes for the `<link>`/`<style>` tag.
+     * @param string|null $key the key that identifies the CSS code block. If null, it will use
+     * `$css` as the key. If two CSS code blocks are registered with the same key, the latter
+     * will overwrite the former.
+     * @throws InvalidConfigException
+     * @since 3.5.6
+     */
+    public static function css(string $css, array $options = [], string $key = null)
+    {
+        // Is this a CSS file?
+        if (preg_match('/^[^\r\n]+\.css/i', $css)) {
+            Craft::$app->getView()->registerCssFile($css, $options, $key);
+        } else {
+            Craft::$app->getView()->registerCss($css, $options, $key);
+        }
+    }
+
+    /**
+     * Registers a JS file or a JS code block.
+     *
+     * @param string $js the JS file URL, or the content of the JS code block to be registered
+     * @param array $options the HTML attributes for the `<script>` tag.
+     * @param string|null $key the key that identifies the JS code block. If null, it will use
+     * $css as the key. If two JS code blocks are registered with the same key, the latter
+     * will overwrite the former.
+     * @throws InvalidConfigException
+     * @since 3.5.6
+     */
+    public static function js(string $js, array $options = [], string $key = null)
+    {
+        // Is this a JS file?
+        if (preg_match('/^[^\r\n]+\.js/i', $js)) {
+            Craft::$app->getView()->registerJsFile($js, $options, $key);
+        } else {
+            $position = $options['position'] ?? View::POS_READY;
+            Craft::$app->getView()->registerJs($js, $position, $key);
+        }
     }
 }

@@ -26,6 +26,7 @@ use craft\web\assets\elementresizedetector\ElementResizeDetectorAsset;
 use craft\web\assets\fabric\FabricAsset;
 use craft\web\assets\fileupload\FileUploadAsset;
 use craft\web\assets\garnish\GarnishAsset;
+use craft\web\assets\iframeresizer\IframeResizerAsset;
 use craft\web\assets\jquerypayment\JqueryPaymentAsset;
 use craft\web\assets\jquerytouchevents\JqueryTouchEventsAsset;
 use craft\web\assets\jqueryui\JqueryUiAsset;
@@ -44,37 +45,44 @@ class CpAsset extends AssetBundle
     /**
      * @inheritdoc
      */
-    public function init()
-    {
-        $this->sourcePath = __DIR__ . '/dist';
+    public $sourcePath = __DIR__ . '/dist';
 
-        $this->depends = [
-            AxiosAsset::class,
-            D3Asset::class,
-            ElementResizeDetectorAsset::class,
-            GarnishAsset::class,
-            JqueryAsset::class,
-            JqueryTouchEventsAsset::class,
-            JqueryUiAsset::class,
-            JqueryPaymentAsset::class,
-            DatepickerI18nAsset::class,
-            PicturefillAsset::class,
-            SelectizeAsset::class,
-            VelocityAsset::class,
-            FileUploadAsset::class,
-            XregexpAsset::class,
-            FabricAsset::class,
-        ];
+    /**
+     * @inheritdoc
+     */
+    public $depends = [
+        AxiosAsset::class,
+        D3Asset::class,
+        ElementResizeDetectorAsset::class,
+        GarnishAsset::class,
+        JqueryAsset::class,
+        JqueryTouchEventsAsset::class,
+        JqueryUiAsset::class,
+        JqueryPaymentAsset::class,
+        DatepickerI18nAsset::class,
+        PicturefillAsset::class,
+        SelectizeAsset::class,
+        VelocityAsset::class,
+        FileUploadAsset::class,
+        XregexpAsset::class,
+        FabricAsset::class,
+        IframeResizerAsset::class,
+    ];
 
-        $this->css = [
-            'css/craft.css',
-            'css/charts.css',
-        ];
+    /**
+     * @inheritdoc
+     */
+    public $css = [
+        'css/craft.css',
+        'css/charts.css',
+    ];
 
-        $this->js[] = 'js/Craft' . $this->dotJs();
-
-        parent::init();
-    }
+    /**
+     * @inheritdoc
+     */
+    public $js = [
+        'js/Craft.min.js',
+    ];
 
     /**
      * @inheritdoc
@@ -111,10 +119,16 @@ JS;
             'Buy {name}',
             'Cancel',
             'Choose a user',
+            'Switching sites will lose unsaved changes. Are you sure you want to switch sites?',
             'Choose which table columns should be visible for this source, and in which order.',
+            'Clear',
             'Close Preview',
             'Close',
             'Continue',
+            'Copied to clipboard.',
+            'Copy the reference tag',
+            'Copy the URL',
+            'Copy to clipboard',
             'Couldn’t delete “{name}”.',
             'Couldn’t save new order.',
             'Create',
@@ -134,8 +148,8 @@ JS;
             'Edit',
             'Element',
             'Elements',
-            'Enabled everywhere',
             'Enabled for {site}',
+            'Enabled',
             'Enter the name of the folder',
             'Enter your password to continue.',
             'Enter your password to log back in.',
@@ -148,6 +162,7 @@ JS;
             'From',
             'Give your tab a name.',
             'Handle',
+            'Header Column Heading',
             'Heading',
             'Hide sidebar',
             'Hide',
@@ -165,6 +180,8 @@ JS;
             'Merge the folder (any conflicting files will be replaced)',
             'More',
             'Move',
+            'Move up',
+            'Move down',
             'Name',
             'New category',
             'New child',
@@ -186,6 +203,7 @@ JS;
             'Pay {price}',
             'Pending',
             'Previous Page',
+            'Publish changes',
             'Really delete folder “{folder}”?',
             'Remove',
             'Rename folder',
@@ -194,6 +212,7 @@ JS;
             'Replace it',
             'Replace the folder (all existing files will be deleted)',
             'Save as a new asset',
+            'Save draft',
             'Save',
             'Saving',
             'Score',
@@ -235,8 +254,10 @@ JS;
             'hours',
             'minute',
             'minutes',
+            'saved {timestamp} by {creator}',
             'second',
             'seconds',
+            'updated {timestamp}',
             'week',
             'weeks',
             '{ctrl}C to copy.',
@@ -244,6 +265,7 @@ JS;
             '{first}-{last} of {total}',
             '{num, number} {num, plural, =1{Available Update} other{Available Updates}}',
             '{total, number} {total, plural, =1{{item}} other{{items}}}',
+            '{type} saved.',
             '“{name}” deleted.',
         ]);
     }
@@ -278,6 +300,7 @@ JS;
             'allowUppercaseInSlug' => (bool)$generalConfig->allowUppercaseInSlug,
             'apiParams' => Craft::$app->apiParams,
             'asciiCharMap' => StringHelper::asciiCharMap(true, Craft::$app->language),
+            'autosaveDrafts' => (bool)$generalConfig->autosaveDrafts,
             'baseApiUrl' => Craft::$app->baseApiUrl,
             'baseCpUrl' => UrlHelper::cpUrl(),
             'baseSiteUrl' => UrlHelper::siteUrl(),
@@ -285,7 +308,8 @@ JS;
             'canAccessQueueManager' => $userSession->checkPermission('utility:queue-manager'),
             'cpTrigger' => $generalConfig->cpTrigger,
             'datepickerOptions' => $this->_datepickerOptions($locale, $currentUser, $generalConfig),
-            'defaultIndexCriteria' => ['enabledForSite' => null],
+            'defaultCookieOptions' => $this->_defaultCookieOptions(),
+            'defaultIndexCriteria' => [],
             'deltaNames' => $view->getDeltaNames(),
             'editableCategoryGroups' => $upToDate ? $this->_editableCategoryGroups() : [],
             'edition' => Craft::$app->getEdition(),
@@ -305,6 +329,7 @@ JS;
             'pageTrigger' => $generalConfig->getPageTrigger(),
             'path' => $request->getPathInfo(),
             'pathParam' => $generalConfig->pathParam,
+            'previewIframeResizerOptions' => $this->_previewIframeResizerOptions($generalConfig),
             'primarySiteId' => $primarySite ? (int)$primarySite->id : null,
             'primarySiteLanguage' => $primarySite->language ?? null,
             'Pro' => Craft::Pro,
@@ -314,9 +339,10 @@ JS;
             'remainingSessionTime' => !in_array($request->getSegment(1), ['updates', 'manualupdate'], true) ? $userSession->getRemainingSessionTime() : 0,
             'right' => $orientation === 'ltr' ? 'right' : 'left',
             'runQueueAutomatically' => (bool)$generalConfig->runQueueAutomatically,
-            'scriptName' => $request->getScriptFile(),
+            'scriptName' => basename($request->getScriptFile()),
             'siteId' => $upToDate ? (int)$sitesService->currentSite->id : null,
             'sites' => $this->_sites($sitesService),
+            'siteToken' => $generalConfig->siteToken,
             'slugWordSeparator' => $generalConfig->slugWordSeparator,
             'Solo' => Craft::Solo,
             'systemUid' => Craft::$app->getSystemUid(),
@@ -353,6 +379,17 @@ JS;
         ];
     }
 
+    private function _defaultCookieOptions(): array
+    {
+        $config = Craft::cookieConfig();
+        return [
+            'path' => $config['path'] ?? '/',
+            'domain' => $config['domain'] ?? null,
+            'secure' => $config['secure'] ?? false,
+            'sameSite' => $config['sameSite'] ?? 'strict',
+        ];
+    }
+
     private function _editableCategoryGroups(): array
     {
         $groups = [];
@@ -369,12 +406,30 @@ JS;
         return $groups;
     }
 
+    /**
+     * @param GeneralConfig $generalConfig
+     * @return array|false|null
+     */
+    private function _previewIframeResizerOptions(GeneralConfig $generalConfig)
+    {
+        if (!$generalConfig->useIframeResizer) {
+            return false;
+        }
+
+        // Treat false as [] as well now that useIframeResizer exists
+        if (empty($generalConfig->previewIframeResizerOptions)) {
+            return null;
+        }
+
+        return $generalConfig->previewIframeResizerOptions;
+    }
+
     private function _publishableSections(User $currentUser): array
     {
         $sections = [];
 
         foreach (Craft::$app->getSections()->getEditableSections() as $section) {
-            if ($section->type !== Section::TYPE_SINGLE && $currentUser->can('createEntries:' . $section->uid)) {
+            if ($section->type !== Section::TYPE_SINGLE && $currentUser->can("createEntries:$section->uid")) {
                 $sections[] = [
                     'entryTypes' => $this->_entryTypes($section),
                     'handle' => $section->handle,
@@ -383,6 +438,7 @@ JS;
                     'sites' => $section->getSiteIds(),
                     'type' => $section->type,
                     'uid' => $section->uid,
+                    'canPublish' => $currentUser->can("publishEntries:$section->uid"),
                 ];
             }
         }

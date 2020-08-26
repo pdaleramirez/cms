@@ -82,18 +82,19 @@ class m160807_144858_sites extends Migration
             ->one($this->db);
 
         $locales = (new Query())
-            ->select(['locale'])
+            ->select(['uid', 'locale'])
             ->from(['{{%locales}}'])
             ->orderBy(['sortOrder' => SORT_ASC])
-            ->column($this->db);
+            ->pairs($this->db);
 
         $siteIdsByLocale = [];
         $this->caseSql = 'case';
         $languageCaseSql = 'case';
         $localePermissions = [];
         $permissionsCaseSql = 'case';
+        $sortOrder = 0;
 
-        foreach ($locales as $i => $locale) {
+        foreach ($locales as $uid => $locale) {
             $siteHandle = $this->locale2handle($locale);
             $language = $this->locale2language($locale);
 
@@ -103,7 +104,8 @@ class m160807_144858_sites extends Migration
                 'language' => $language,
                 'hasUrls' => 1,
                 'baseUrl' => $siteInfo['siteUrl'],
-                'sortOrder' => $i + 1,
+                'sortOrder' => ++$sortOrder,
+                'uid' => $uid,
             ]);
 
             $siteId = $this->db->getLastInsertID();
@@ -527,7 +529,7 @@ class m160807_144858_sites extends Migration
             $localeParts = array_filter(preg_split('/[^a-zA-Z0-9]/', $locale));
 
             // Prefix with a random string so there's no chance of a conflict with other locales
-            return StringHelper::randomStringWithChars('abcdefghijklmnopqrstuvwxyz', 7) . ($localeParts ? '_' . implode('_', $localeParts) : '');
+            return StringHelper::randomString(7) . ($localeParts ? '_' . implode('_', $localeParts) : '');
         }
 
         return $locale;

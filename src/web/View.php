@@ -8,7 +8,7 @@
 namespace craft\web;
 
 use Craft;
-use craft\base\Element;
+use craft\base\ElementInterface;
 use craft\events\RegisterTemplateRootsEvent;
 use craft\events\TemplateEvent;
 use craft\helpers\ElementHelper;
@@ -25,7 +25,6 @@ use craft\web\twig\TemplateLoader;
 use JSMin\JSMin;
 use Minify_CSSmin;
 use Twig\Error\LoaderError as TwigLoaderError;
-use Twig\Error\RuntimeError;
 use Twig\Error\RuntimeError as TwigRuntimeError;
 use Twig\Error\SyntaxError as TwigSyntaxError;
 use Twig\Extension\CoreExtension;
@@ -36,8 +35,8 @@ use Twig\Template as TwigTemplate;
 use yii\base\Arrayable;
 use yii\base\Exception;
 use yii\base\Model;
+use yii\base\NotSupportedException;
 use yii\web\AssetBundle as YiiAssetBundle;
-use yii\web\Response as WebResponse;
 
 /**
  * @inheritdoc
@@ -102,18 +101,24 @@ class View extends \yii\web\View
      * @var bool Whether to minify CSS registered with [[registerCss()]]
      * @since 3.4.0
      */
-    public $minifyCss;
+    public $minifyCss = false;
 
     /**
      * @var bool Whether to minify JS registered with [[registerJs()]]
      * @since 3.4.0
      */
-    public $minifyJs;
+    public $minifyJs = false;
 
     /**
-     * @var array The sizes that element thumbnails should be rendered in
+     * @var bool Whether to allow [[evaluateDynamicContent()]] to be called.
+     *
+     * ::: warning
+     * Don’t enable this unless you have a *very* good reason to.
+     * :::
+     *
+     * @since 3.5.0
      */
-    private static $_elementThumbSizes = [32, 64, 120, 240];
+    public $allowEval = false;
 
     /**
      * @var Environment|null The Twig environment instance used for control panel templates
@@ -217,6 +222,12 @@ class View extends \yii\web\View
     private $_scripts;
 
     /**
+     * @var array the registered generic HTML code blocks
+     * @see registerHtml()
+     */
+    private $_html;
+
+    /**
      * @var
      */
     private $_hooks;
@@ -263,23 +274,6 @@ class View extends \yii\web\View
             $this->setTemplateMode(self::TEMPLATE_MODE_CP);
         } else {
             $this->setTemplateMode(self::TEMPLATE_MODE_SITE);
-        }
-
-        if ($this->minifyCss === null || $this->minifyJs === null) {
-            $response = Craft::$app->getResponse();
-            if ($this->minifyCss === null) {
-                $this->minifyCss = (
-                    $response instanceof WebResponse &&
-                    $response->format === WebResponse::FORMAT_HTML
-                );
-            }
-            if ($this->minifyJs === null) {
-                $this->minifyJs = (
-                    $response instanceof WebResponse &&
-                    $response->format === WebResponse::FORMAT_HTML &&
-                    Craft::$app->getConfig()->getGeneral()->useCompressedJs
-                );
-            }
         }
 
         // Register the cp.elements.element hook
@@ -671,8 +665,23 @@ class View extends \yii\web\View
      */
     public function normalizeObjectTemplate(string $template): string
     {
-        // Tokenize objects (call preg_replace_callback() multiple times in case there are nested objects)
         $tokens = [];
+
+        // Tokenize {% verbatim %} tags
+        $template = preg_replace_callback('/\{%-?\s*verbatim\s*-?%\}.*?{%-?\s*endverbatim\s*-?%\}/s', function(array $matches) use (&$tokens) {
+            $token = 'tok_' . StringHelper::randomString(10);
+            $tokens[$token] = $matches[0];
+            return $token;
+        }, $template);
+
+        // Tokenize inline code and code blocks
+        $template = preg_replace_callback('/(?<!`)(`|`{3,})(?!`).*?(?<!`)\1(?!`)/s', function(array $matches) use (&$tokens) {
+            $token = 'tok_' . StringHelper::randomString(10);
+            $tokens[$token] = '{% verbatim %}' . $matches[0] . '{% endverbatim %}';
+            return $token;
+        }, $template);
+
+        // Tokenize objects (call preg_replace_callback() multiple times in case there are nested objects)
         while (true) {
             $template = preg_replace_callback('/\{\s*([\'"]?)\w+\1\s*:[^\{]+?\}/', function(array $matches) use (&$tokens) {
                 $token = 'tok_' . StringHelper::randomString(10);
@@ -685,7 +694,15 @@ class View extends \yii\web\View
         }
 
         // Swap out the remaining {xyz} tags with {{object.xyz}}
-        $template = preg_replace('/(?<!\{)\{\s*(\w+)([^\{]*?)\}/', '{{ (_variables.$1 ?? object.$1)$2|raw }}', $template);
+        $template = preg_replace_callback('/(?<!\{)\{\s*(\w+)([^\{]*?)\}/', function(array $match) {
+            // Is this a function call like `clone()`?
+            if (!empty($match[2]) && $match[2][0] === '(') {
+                $replace = $match[1] . $match[2];
+            } else {
+                $replace = "(_variables.$match[1] ?? object.$match[1])$match[2]";
+            }
+            return "{{ $replace|raw }}";
+        }, $template);
 
         // Bring the objects back
         foreach (array_reverse($tokens) as $token => $value) {
@@ -739,8 +756,8 @@ class View extends \yii\web\View
      * - TemplateName/index.twig
      *
      * If this is a front-end request, the actual list of file extensions and
-     * index filenames are configurable via the <config:defaultTemplateExtensions>
-     * and <config:indexTemplateFilenames> config settings.
+     * index filenames are configurable via the <config3:defaultTemplateExtensions>
+     * and <config3:indexTemplateFilenames> config settings.
      *
      * For example if you set the following in config/general.php:
      *
@@ -879,8 +896,8 @@ class View extends \yii\web\View
             foreach ($roots as $templateRoot => $basePaths) {
                 /** @var string[] $basePaths */
                 $templateRootLen = strlen($templateRoot);
-                if (strncasecmp($templateRoot . '/', $name . '/', $templateRootLen + 1) === 0) {
-                    $subName = strlen($name) === $templateRootLen ? '' : substr($name, $templateRootLen + 1);
+                if ($templateRoot === '' || strncasecmp($templateRoot . '/', $name . '/', $templateRootLen + 1) === 0) {
+                    $subName = $templateRoot === '' ? $name : (strlen($name) === $templateRootLen ? '' : substr($name, $templateRootLen + 1));
                     foreach ($basePaths as $basePath) {
                         if (($path = $this->_resolveTemplate($basePath, $subName)) !== null) {
                             return $this->_templatePaths[$key] = $path;
@@ -920,7 +937,12 @@ class View extends \yii\web\View
     public function registerCss($css, $options = [], $key = null)
     {
         if ($this->minifyCss) {
-            $css = Minify_CSSmin::minify($css);
+            // Sanity check to work around https://github.com/tubalmartin/YUI-CSS-compressor-PHP-port/issues/58
+            if (preg_match('/\{[^\}]*$/', $css, $matches, PREG_OFFSET_CAPTURE)) {
+                Craft::warning("Unable to minify CSS due to an unclosed CSS block at offset {$matches[0][1]}.", __METHOD__);
+            } else {
+                $css = Minify_CSSmin::minify($css);
+            }
         }
 
         parent::registerCss($css, $options, $key);
@@ -1048,6 +1070,26 @@ class View extends \yii\web\View
     {
         $key = $key ?: md5($script);
         $this->_scripts[$position][$key] = Html::script($script, $options);
+    }
+
+    /**
+     * Registers arbitrary HTML to be injected into the final page response.
+     *
+     * @param string $html the HTML code to be registered
+     * @param int $position the position at which the HTML code should be inserted in the page. Possible values are:
+     * - [[POS_HEAD]]: in the head section
+     * - [[POS_BEGIN]]: at the beginning of the body section
+     * - [[POS_END]]: at the end of the body section
+     * @param string $key the key that identifies the HTML code. If null, it will use a hash of the HTML as the key.
+     * If two HTML code blocks are registered with the same position and key, the latter will overwrite the former.
+     * @since 3.5.0
+     */
+    public function registerHtml(string $html, int $position = self::POS_END, string $key = null)
+    {
+        if ($key === null) {
+            $key = md5($html);
+        }
+        $this->_html[$position][$key] = $html;
     }
 
     /**
@@ -1383,41 +1425,30 @@ JS;
      * <input type="text" name="foo[bar][title]" id="foo-bar-title">
      * ```
      *
-     * @param string $html The template with the inputs.
+     * @param string $html The HTML code
      * @param string|null $namespace The namespace. Defaults to the [[getNamespace()|active namespace]].
-     * @param bool $otherAttributes Whether id=, for=, etc., should also be namespaced. Defaults to `true`.
-     * @return string The HTML with namespaced input names.
+     * @param bool $otherAttributes Whether `id`, `for`, and other attributes should be namespaced (in addition to `name`)
+     * @param bool $withClasses Whether class names should be namespaced as well (affects both `class` attributes and
+     * class name CSS selectors within `<style>` tags). This will only have an effect if `$otherAttributes` is `true`.
+     * @return string The HTML with namespaced attributes
      */
-    public function namespaceInputs(string $html, string $namespace = null, bool $otherAttributes = true): string
+    public function namespaceInputs(string $html, string $namespace = null, bool $otherAttributes = true, bool $withClasses = false): string
     {
         if ($html === '') {
-            return '';
+            return $html;
         }
 
         if ($namespace === null) {
             $namespace = $this->getNamespace();
-        }
-
-        if ($namespace !== null) {
-            // Protect the textarea content
-            $this->_textareaMarkers = [];
-            $html = preg_replace_callback('/(<textarea\b[^>]*>)(.*?)(<\/textarea>)/is',
-                [$this, '_createTextareaMarker'], $html);
-
-            // name= attributes
-            $html = preg_replace('/(?<![\w\-])(name=(\'|"))([^\'"\[\]]+)([^\'"]*)\2/i', '$1' . $namespace . '[$3]$4$2', $html);
-
-            // id= and for= attributes
-            if ($otherAttributes) {
-                $idNamespace = $this->formatInputId($namespace);
-                $html = preg_replace('/(?<![\w\-])((id|for|list|aria\-labelledby|data\-target|data\-reverse\-target|data\-target\-prefix)=(\'|")#?)([^\.\'"][^\'"]*)?\3/i', '$1' . $idNamespace . '-$4$3', $html);
+            // If there's no active namespace, we're done here
+            if ($namespace === null) {
+                return $html;
             }
-
-            // Bring back the textarea content
-            $html = str_replace(array_keys($this->_textareaMarkers), array_values($this->_textareaMarkers), $html);
         }
 
-        return $html;
+        return $otherAttributes
+            ? Html::namespaceHtml($html, $namespace, $withClasses)
+            : Html::namespaceInputs($html, $namespace);
     }
 
     /**
@@ -1432,15 +1463,18 @@ JS;
      */
     public function namespaceInputName(string $inputName, string $namespace = null): string
     {
+        if ($inputName === '') {
+            return $inputName;
+        }
+
         if ($namespace === null) {
             $namespace = $this->getNamespace();
+            if ($namespace === null) {
+                return $inputName;
+            }
         }
 
-        if ($namespace !== null) {
-            $inputName = preg_replace('/([^\'"\[\]]+)([^\'"]*)/', $namespace . '[$1]$2', $inputName);
-        }
-
-        return $inputName;
+        return Html::namespaceInputName($inputName, $namespace);
     }
 
     /**
@@ -1455,15 +1489,18 @@ JS;
      */
     public function namespaceInputId(string $inputId, string $namespace = null): string
     {
+        if ($inputId === '') {
+            return $inputId;
+        }
+
         if ($namespace === null) {
             $namespace = $this->getNamespace();
+            if ($namespace === null) {
+                return Html::id($inputId);
+            }
         }
 
-        if ($namespace !== null) {
-            $inputId = $this->formatInputId($namespace) . '-' . $inputId;
-        }
-
-        return $inputId;
+        return Html::namespaceId($inputId, $namespace);
     }
 
     /**
@@ -1477,10 +1514,15 @@ JS;
      *
      * @param string $inputName The input name.
      * @return string The input ID.
+     * @deprecated in 3.5.0. Use [[Html::id()]] instead.
      */
     public function formatInputId(string $inputName): string
     {
-        return rtrim(preg_replace('/[\[\]\\\]+/', '-', $inputName), '-');
+        if ($inputName === '') {
+            return $inputName;
+        }
+
+        return Html::id($inputName);
     }
 
     /**
@@ -1564,11 +1606,24 @@ JS;
     public function endPage($ajaxMode = false)
     {
         if (!$ajaxMode && Craft::$app->getRequest()->getIsCpRequest()) {
-            $this->_registeredJs('registeredJsFiles', $this->_registeredJsFiles);
-            $this->_registeredJs('registeredAssetBundles', $this->_registeredAssetBundles);
+            $this->_setJsProperty('registeredJsFiles', $this->_registeredJsFiles);
+            $this->_setJsProperty('registeredAssetBundles', $this->_registeredAssetBundles);
         }
 
         parent::endPage($ajaxMode);
+    }
+
+    /**
+     * @inheritdoc
+     * @throws NotSupportedException unless [[allowEval]] has been set to `true`.
+     */
+    public function evaluateDynamicContent($statements)
+    {
+        if (!$this->allowEval) {
+            throw new NotSupportedException('evaluateDynamicContent() is disallowed.');
+        }
+
+        return parent::evaluateDynamicContent($statements);
     }
 
     // Events
@@ -1682,6 +1737,9 @@ JS;
         if (!empty($this->_scripts[self::POS_HEAD])) {
             $lines[] = implode("\n", $this->_scripts[self::POS_HEAD]);
         }
+        if (!empty($this->_html[self::POS_HEAD])) {
+            $lines[] = implode("\n", $this->_html[self::POS_HEAD]);
+        }
 
         $html = parent::renderHeadHtml();
 
@@ -1697,6 +1755,9 @@ JS;
         if (!empty($this->_scripts[self::POS_BEGIN])) {
             $lines[] = implode("\n", $this->_scripts[self::POS_BEGIN]);
         }
+        if (!empty($this->_html[self::POS_BEGIN])) {
+            $lines[] = implode("\n", $this->_html[self::POS_BEGIN]);
+        }
 
         $html = parent::renderBodyBeginHtml();
 
@@ -1711,6 +1772,9 @@ JS;
         $lines = [];
         if (!empty($this->_scripts[self::POS_END])) {
             $lines[] = implode("\n", $this->_scripts[self::POS_END]);
+        }
+        if (!empty($this->_html[self::POS_END])) {
+            $lines[] = implode("\n", $this->_html[self::POS_END]);
         }
 
         $html = parent::renderBodyEndHtml($ajaxMode);
@@ -1895,7 +1959,10 @@ JS;
 
         foreach ($event->roots as $templatePath => $dir) {
             $templatePath = strtolower(trim($templatePath, '/'));
-            $roots[$templatePath][] = $dir;
+            if (!isset($roots[$templatePath])) {
+                $roots[$templatePath] = [];
+            }
+            array_push($roots[$templatePath], ...(array)$dir);
         }
 
         // Longest (most specific) first
@@ -1904,21 +1971,7 @@ JS;
         return $this->_templateRoots[$which] = $roots;
     }
 
-    /**
-     * Replaces textarea contents with a marker.
-     *
-     * @param array $matches
-     * @return string
-     */
-    private function _createTextareaMarker(array $matches): string
-    {
-        $marker = '{marker:' . StringHelper::randomString() . '}';
-        $this->_textareaMarkers[$marker] = $matches[2];
-
-        return $matches[1] . $marker . $matches[3];
-    }
-
-    private function _registeredJs($property, $names)
+    private function _setJsProperty($property, $names)
     {
         if (empty($names)) {
             return;
@@ -1927,7 +1980,7 @@ JS;
         $js = "if (typeof Craft !== 'undefined') {\n";
         foreach (array_keys($names) as $name) {
             if ($name) {
-                $jsName = Json::encode($name);
+                $jsName = Json::encode(str_replace(['<', '>'], '', $name));
                 $js .= "  Craft.{$property}[{$jsName}] = true;\n";
             }
         }
@@ -1947,7 +2000,7 @@ JS;
             return null;
         }
 
-        /** @var Element $element */
+        /** @var ElementInterface $element */
         $element = $context['element'];
         $label = $element->getUiLabel();
 
@@ -1967,24 +2020,30 @@ JS;
         // Create the thumb/icon image, if there is one
         // ---------------------------------------------------------------------
 
-        $thumbUrl = $element->getThumbUrl(self::$_elementThumbSizes[0]);
+        $thumbSize = $elementSize === 'small' ? 34 : 120;
+        $thumbUrl = $element->getThumbUrl($thumbSize);
 
         if ($thumbUrl !== null) {
-            $srcsets = [];
+            $imageSize2x = $thumbSize * 2;
+            $thumbUrl2x = $element->getThumbUrl($imageSize2x);
 
-            foreach (self::$_elementThumbSizes as $i => $size) {
-                if ($i == 0) {
-                    $srcset = $thumbUrl;
-                } else {
-                    $srcset = $element->getThumbUrl($size);
-                }
-
-                $srcsets[] = $srcset . ' ' . $size . 'w';
-            }
-
-            $sizesHtml = ($elementSize === 'small' ? self::$_elementThumbSizes[0] : self::$_elementThumbSizes[2]) . 'px';
+            $srcsets = [
+                "$thumbUrl {$thumbSize}w",
+                "$thumbUrl2x {$imageSize2x}w",
+            ];
+            $sizesHtml = "{$thumbSize}px";
             $srcsetHtml = implode(', ', $srcsets);
-            $imgHtml = "<div class='elementthumb' data-sizes='{$sizesHtml}' data-srcset='{$srcsetHtml}'></div>";
+            $imgHtml = Html::tag('div', '', [
+                'class' => array_filter([
+                    'elementthumb',
+                    $element->getHasCheckeredThumb() ? 'checkered' : null,
+                    $elementSize === 'small' && $element->getHasRoundedThumb() ? 'rounded' : null,
+                ]),
+                'data' => [
+                    'sizes' => $sizesHtml,
+                    'srcset' => $srcsetHtml,
+                ],
+            ]);
         } else {
             $imgHtml = '';
         }

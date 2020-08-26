@@ -395,7 +395,14 @@ class ViewTest extends TestCase
             ['{{ (_variables.foo ?? object.foo).fn({bar: baz})|raw }}', '{foo.fn({bar: baz})}'],
             ['{{ (_variables.foo ?? object.foo).fn({bar: {baz: 1}})|raw }}', '{foo.fn({bar: {baz: 1}})}'],
             ['{{ (_variables.foo ?? object.foo).fn(\'bar:baz\')|raw }}', '{foo.fn(\'bar:baz\')}'],
-            ['{{ (_variables.foo ?? object.foo).fn({\'bar\': baz})|raw }}', '{foo.fn({\'bar\': baz})}']
+            ['{{ (_variables.foo ?? object.foo).fn({\'bar\': baz})|raw }}', '{foo.fn({\'bar\': baz})}'],
+            ['{% verbatim %}`{foo}`{% endverbatim %}', '`{foo}`'],
+            ["{% verbatim %}`{foo}\n{bar}`{% endverbatim %}", "`{foo}\n{bar}`"],
+            ["{% verbatim %}```\n{% exit %}\n```{% endverbatim %}", "```\n{% exit %}\n```"],
+            ["{% verbatim %}````\n{% exit %}\n````{% endverbatim %}", "````\n{% exit %}\n````"],
+            ["{% verbatim %}\n{foo}\n{% endverbatim %}", "{% verbatim %}\n{foo}\n{% endverbatim %}"],
+            ["{%- verbatim -%}\n{foo}\n{%- endverbatim -%}", "{%- verbatim -%}\n{foo}\n{%- endverbatim -%}"],
+            ['{{ clone(productCategory).level(1).one().slug|raw }}', '{clone(productCategory).level(1).one().slug}'],
         ];
     }
 
@@ -469,6 +476,9 @@ class ViewTest extends TestCase
 
             // Test that model params dont override variable params.
             ['IM DIFFERENTExample Param', '{ exampleParam }{ object.exampleParam }', $model, ['exampleParam' => 'IM DIFFERENT']],
+
+            // Test basic arrays
+            ['foo=bar', 'foo={foo}', ['foo' => 'bar']],
         ];
     }
 
@@ -525,14 +535,9 @@ class ViewTest extends TestCase
     {
         return [
             ['', ''],
-            ['<input type="text" name="test">', '<input type="text" name="test">'],
-            ['namespace-<input type="text" name="test">', '<input type="text" name="test">', 'namespace'],
-            ['!@#$%^&*()_+{}:"<>?-<input type="text" name="test">', '<input type="text" name="test">', '!@#$%^&*()_+{}:"<>?'],
-            ['namespace-<input type="text" for="test3" id="test2"  name="test">', '<input type="text" for="test3" id="test2"  name="test">', 'namespace'],
-            ['namespace-<input im-not-html-tho="test2">', '<input im-not-html-tho="test2">', 'namespace'],
-            ['namespace-<input type="text" value="im the input" name="test">', '<input type="text" value="im the input" name="test">', 'namespace'],
-            ['namespace-<textarea id="test">Im the content</textarea>', '<textarea id="test">Im the content</textarea>', 'namespace'],
-            ['namespace-<not-html id="test"></not-html>', '<not-html id="test"></not-html>', 'namespace'],
+            ['foo-bar', 'bar', 'foo'],
+            ['foo-bar-baz', 'bar[baz]', 'foo'],
+            ['foo-bar-baz', 'baz', 'foo[bar]'],
         ];
     }
 

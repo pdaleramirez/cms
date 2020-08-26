@@ -9,6 +9,7 @@ use craft\base\FieldInterface;
 use craft\behaviors\CustomFieldBehavior;
 use craft\db\Query;
 use craft\db\Table;
+use craft\helpers\App;
 use craft\helpers\Component;
 use craft\helpers\FileHelper;
 use GuzzleHttp\Client;
@@ -80,7 +81,7 @@ class Craft extends Yii
         }
 
         if (preg_match('/^\$(\w+)$/', $str, $matches)) {
-            $value = getenv($matches[1]);
+            $value = App::env($matches[1]);
             if ($value !== false) {
                 switch (strtolower($value)) {
                     case 'true':
@@ -239,7 +240,7 @@ class Craft extends Yii
 
         foreach ($fieldHandles as $handle => $types) {
             $methods[] = <<<EOD
- * @method self {$handle}(mixed \$value) Sets the [[{$handle}]] property
+ * @method static {$handle}(mixed \$value) Sets the [[{$handle}]] property
 EOD;
 
             $handles[] = <<<EOD

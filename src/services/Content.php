@@ -7,16 +7,15 @@
 
 namespace craft\services;
 
-use Craft;
-use craft\base\Element;
 use craft\base\ElementInterface;
-use craft\base\Field;
+use craft\db\Connection;
 use craft\db\Query;
 use craft\db\Table;
 use craft\events\ElementContentEvent;
 use craft\helpers\Db;
 use yii\base\Component;
 use yii\base\Exception;
+use yii\di\Instance;
 
 /**
  * Content service.
@@ -38,6 +37,12 @@ class Content extends Component
     const EVENT_AFTER_SAVE_CONTENT = 'afterSaveContent';
 
     /**
+     * @var Connection|array|string The database connection to use
+     * @since 3.5.6
+     */
+    public $db = 'db';
+
+    /**
      * @var string
      */
     public $contentTable = Table::CONTENT;
@@ -53,6 +58,15 @@ class Content extends Component
     public $fieldContext = 'global';
 
     /**
+     * @inheritdoc
+     */
+    public function init()
+    {
+        parent::init();
+        $this->db = Instance::ensure($this->db, Connection::class);
+    }
+
+    /**
      * Returns the content row for a given element, with field column prefixes removed from the keys.
      *
      * @param ElementInterface $element The element whose content we're looking for.
@@ -60,7 +74,6 @@ class Content extends Component
      */
     public function getContentRow(ElementInterface $element)
     {
-        /** @var Element $element */
         if (!$element->id || !$element->siteId) {
             return null;
         }
@@ -99,7 +112,6 @@ class Content extends Component
      */
     public function populateElementContent(ElementInterface $element)
     {
-        /** @var Element $element */
         // Make sure the element has content
         if (!$element->hasContent()) {
             return;
@@ -116,7 +128,6 @@ class Content extends Component
 
             if ($fieldLayout) {
                 foreach ($fieldLayout->getFields() as $field) {
-                    /** @var Field $field */
                     if ($field::hasContentColumn()) {
                         $element->setFieldValue($field->handle, $row[$field->handle]);
                     }
@@ -135,7 +146,6 @@ class Content extends Component
      */
     public function saveContent(ElementInterface $element): bool
     {
-        /** @var Element $element */
         if (!$element->id) {
             throw new Exception('Cannot save the content of an unsaved element.');
         }
@@ -166,7 +176,6 @@ class Content extends Component
         $fieldLayout = $element->getFieldLayout();
         if ($fieldLayout) {
             foreach ($fieldLayout->getFields() as $field) {
-                /** @var Field $field */
                 if (
                     (!$element->contentId || $element->isFieldDirty($field->handle)) &&
                     $field::hasContentColumn()
@@ -192,15 +201,13 @@ class Content extends Component
         // Insert/update the DB row
         if ($element->contentId) {
             // Update the existing row
-            Craft::$app->getDb()->createCommand()
-                ->update($this->contentTable, $values, ['id' => $element->contentId])
-                ->execute();
+            Db::update($this->contentTable, $values, [
+                'id' => $element->contentId,
+            ], [], true, $this->db);
         } else {
             // Insert a new row and store its ID on the element
-            Craft::$app->getDb()->createCommand()
-                ->insert($this->contentTable, $values)
-                ->execute();
-            $element->contentId = Craft::$app->getDb()->getLastInsertID($this->contentTable);
+            Db::insert($this->contentTable, $values, true, $this->db);
+            $element->contentId = $this->db->getLastInsertID($this->contentTable);
         }
 
         // Fire an 'afterSaveContent' event

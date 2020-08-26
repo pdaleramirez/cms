@@ -53,6 +53,7 @@ class Color extends Field implements PreviewableFieldInterface
         return Schema::TYPE_STRING . '(7)';
     }
 
+    /** @inheritdoc */
     public function getSettingsHtml()
     {
         return Craft::$app->getView()->renderTemplateMacro('_includes/forms.html', 'colorField', [
@@ -111,11 +112,11 @@ class Color extends Field implements PreviewableFieldInterface
     /**
      * @inheritdoc
      */
-    public function getInputHtml($value, ElementInterface $element = null): string
+    protected function inputHtml($value, ElementInterface $element = null): string
     {
         /** @var ColorData|null $value */
         return Craft::$app->getView()->renderTemplate('_includes/forms/color', [
-            'id' => Craft::$app->getView()->formatInputId($this->handle),
+            'id' => Html::id($this->handle),
             'name' => $this->handle,
             'value' => $value ? $value->getHex() : null,
         ]);

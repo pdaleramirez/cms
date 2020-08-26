@@ -7,6 +7,7 @@ Craft.ui =
                 attr: {
                     'class': 'text',
                     type: (config.type || 'text'),
+                    inputmode: config.inputmode,
                     id: config.id,
                     size: config.size,
                     name: config.name,
@@ -59,7 +60,67 @@ Craft.ui =
         },
 
         createTextField: function(config) {
+            if (!config.id) {
+                config.id = 'text' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createTextInput(config), config);
+        },
+
+        createCopyTextInput: function(config) {
+            let id = config.id || `copytext-${Math.floor(Math.random() * 1000000000)}`;
+            let buttonId = config.buttonId || `${id}-btn`;
+
+            let $container = $('<div/>', {
+                'class': 'copytext',
+            });
+
+            let $input = this.createTextInput($.extend({}, config, {
+                readonly: true,
+            })).appendTo($container);
+
+            let $btn = $('<button/>', {
+                type: 'button',
+                id: buttonId,
+                'class': 'btn',
+                'data-icon': 'clipboard',
+                title: Craft.t('app', 'Copy to clipboard'),
+            }).appendTo($container);
+
+            $btn.on('click', () => {
+                $input[0].select();
+                document.execCommand('copy');
+                Craft.cp.displayNotice(Craft.t('app', 'Copied to clipboard.'));
+                $container.trigger('copy');
+                $input[0].setSelectionRange(0, 0);
+            });
+
+            return $container;
+        },
+
+        createCopyTextField: function(config) {
+            if (!config.id) {
+                config.id = 'copytext' + Math.floor(Math.random() * 1000000000);
+            }
+            return this.createField(this.createCopyTextInput(config), config);
+        },
+
+        createCopyTextPrompt: function(config) {
+            let $container = $('<div/>', {
+                'class': 'modal fitted',
+            });
+            let $body = $('<div/>', {
+                'class': 'body',
+            }).appendTo($container);
+            this.createCopyTextField($.extend({
+                size: Math.max(Math.min(config.value.length, 50), 25),
+            }, config)).appendTo($body);
+            let modal = new Garnish.Modal($container, {
+                closeOtherModals: false,
+            });
+            $container.on('copy', () => {
+                modal.hide();
+            })
+            return $container;
         },
 
         createTextarea: function(config) {
@@ -92,6 +153,9 @@ Craft.ui =
         },
 
         createTextareaField: function(config) {
+            if (!config.id) {
+                config.id = 'textarea' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createTextarea(config), config);
         },
 
@@ -112,14 +176,38 @@ Craft.ui =
                 'data-target-prefix': config.targetPrefix
             }).appendTo($container);
 
+            // Normalize the options into an array
+            if ($.isPlainObject(config.options)) {
+                let options = [];
+                for (var key in config.options) {
+                    if (!config.options.hasOwnProperty(key)) {
+                        continue;
+                    }
+                    let option = config.options[key];
+                    if ($.isPlainObject(option)) {
+                        if (typeof option.optgroup !== 'undefined') {
+                            options.push(option);
+                        } else {
+                            options.push({
+                                label: option.label,
+                                value: typeof option.value !== 'undefined' ? option.value : key,
+                                disabled: typeof option.disabled !== 'undefined' ? option.disabled : false,
+                            });
+                        }
+                    } else {
+                        options.push({
+                            label: option,
+                            value: key,
+                        })
+                    }
+                }
+                config.options = options;
+            }
+
             var $optgroup = null;
 
-            for (var key in config.options) {
-                if (!config.options.hasOwnProperty(key)) {
-                    continue;
-                }
-
-                var option = config.options[key];
+            for (let i = 0; i < config.options.length; i++) {
+                let option = config.options[i];
 
                 // Starting a new <optgroup>?
                 if (typeof option.optgroup !== 'undefined') {
@@ -127,15 +215,11 @@ Craft.ui =
                         'label': option.label
                     }).appendTo($select);
                 } else {
-                    var optionLabel = (typeof option.label !== 'undefined' ? option.label : option),
-                        optionValue = (typeof option.value !== 'undefined' ? option.value : key),
-                        optionDisabled = (typeof option.disabled !== 'undefined' ? option.disabled : false);
-
                     $('<option/>', {
-                        'value': optionValue,
-                        'selected': (optionValue == config.value),
-                        'disabled': optionDisabled,
-                        'html': optionLabel
+                        'value': option.value,
+                        'selected': (option.value == config.value),
+                        'disabled': typeof option.disabled !== 'undefined' ? option.disabled : false,
+                        'html':  option.label
                     }).appendTo($optgroup || $select);
                 }
             }
@@ -149,6 +233,9 @@ Craft.ui =
         },
 
         createSelectField: function(config) {
+            if (!config.id) {
+                config.id = 'select' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createSelect(config), config);
         },
 
@@ -203,8 +290,12 @@ Craft.ui =
         },
 
         createCheckboxField: function(config) {
+            if (!config.id) {
+                config.id = 'checkbox' + Math.floor(Math.random() * 1000000000);
+            }
+
             var $field = $('<div class="field checkboxfield"/>', {
-                id: (config.id ? config.id + '-field' : null)
+                id: `${config.id}-field`,
             });
 
             if (config.first) {
@@ -224,7 +315,7 @@ Craft.ui =
         },
 
         createCheckboxSelect: function(config) {
-            var $container = $('<div class="checkbox-select"/>');
+            var $container = $('<fieldset class="checkbox-select"/>');
 
             if (config.class) {
                 $container.addClass(config.class);
@@ -277,6 +368,9 @@ Craft.ui =
         },
 
         createCheckboxSelectField: function(config) {
+            if (!config.id) {
+                config.id = 'checkboxselect' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createCheckboxSelect(config), config);
         },
 
@@ -290,6 +384,8 @@ Craft.ui =
                 'data-value': value,
                 'data-indeterminate-value': indeterminateValue,
                 id: config.id,
+                role: 'switch',
+                'aria-checked': config.on ? 'true' : (config.indeterminate ? 'mixed' : 'false'),
                 'aria-labelledby': config.labelId,
                 'data-target': config.toggle,
                 'data-reverse-target': config.reverseToggle
@@ -329,10 +425,17 @@ Craft.ui =
                 new Craft.FieldToggle($container);
             }
 
-            return $container.lightswitch();
+            new Craft.LightSwitch($container, {
+                onChange: config.onChange || $.noop,
+            });
+
+            return $container;
         },
 
         createLightswitchField: function(config) {
+            if (!config.id) {
+                config.id = 'lightswitch' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createLightswitch(config), config)
                 .addClass('lightswitch-field');
         },
@@ -375,6 +478,9 @@ Craft.ui =
         },
 
         createColorField: function(config) {
+            if (!config.id) {
+                config.id = 'color' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createColorInput(config), config);
         },
 
@@ -419,6 +525,9 @@ Craft.ui =
         },
 
         createDateField: function(config) {
+            if (!config.id) {
+                config.id = 'date' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createDateInput(config), config);
         },
 
@@ -445,7 +554,6 @@ Craft.ui =
 
             var $menu = $('<div/>', {'class': 'menu'});
             var $ul = $('<ul/>', {'class': 'padded'}).appendTo($menu);
-            var menu = new Garnish.Menu($menu);
             var $allOption = $('<a/>')
                 .addClass('sel')
                 .text(Craft.t('app', 'All'))
@@ -578,16 +686,16 @@ Craft.ui =
 
             $dateInputs.on('change', function() {
                 // Do the start & end dates match one of our options?
-                var startDate = $startDate.datepicker('getDate');
-                var endDate = $endDate.datepicker('getDate');
-                var startTime = startDate ? startDate.getTime() : null;
-                var endTime = endDate ? endDate.getTime() : null;
+                let startDate = $startDate.datepicker('getDate');
+                let endDate = $endDate.datepicker('getDate');
+                let startTime = startDate ? startDate.getTime() : null;
+                let endTime = endDate ? endDate.getTime() : null;
 
-                var $options = $ul.find('a');
-                var $option;
-                var foundOption = false;
+                let $options = $ul.find('a');
+                let $option;
+                let foundOption = false;
 
-                for (var i = 0; i < $options.length; i++) {
+                for (let i = 0; i < $options.length; i++) {
                     $option = $options.eq(i);
                     if (
                         startTime === ($option.data('startTime') || null) &&
@@ -624,13 +732,17 @@ Craft.ui =
                 $endDate.datepicker('hide');
             });
 
-            var btnClasses = 'btn menubtn';
+            let btnClasses = 'btn menubtn';
             if (config.class) {
                 btnClasses = btnClasses + ' ' + config.class;
             }
 
-            var $btn = $('<div class="'+btnClasses+'" data-icon="date"/>')
-                .text(Craft.t('app', 'All'));
+            let $btn = $('<button/>', {
+                type: 'button',
+                class: btnClasses,
+                'data-icon': 'date',
+                text: Craft.t('app', 'All'),
+            });
 
             new Garnish.MenuBtn($btn, menu);
 
@@ -693,6 +805,9 @@ Craft.ui =
         },
 
         createTimeField: function(config) {
+            if (!config.id) {
+                config.id = 'time' + Math.floor(Math.random() * 1000000000);
+            }
             return this.createField(this.createTimeInput(config), config);
         },
 
@@ -709,30 +824,19 @@ Craft.ui =
                 $field.addClass('first');
             }
 
-            if (label || config.instructions) {
+            if (label) {
                 var $heading = $('<div class="heading"/>').appendTo($field);
 
-                if (label) {
-                    var $label = $('<label/>', {
-                        'id': config.labelId || (config.id ? config.id + '-label' : null),
-                        'class': (config.required ? 'required' : null),
-                        'for': config.id,
-                        text: label
-                    }).appendTo($heading);
+                var $label = $('<label/>', {
+                    'id': config.labelId || (config.id ? `${config.id}-label` : null),
+                    'class': (config.required ? 'required' : null),
+                    'for': config.id,
+                    text: label
+                }).appendTo($heading);
+            }
 
-                    if (siteId) {
-                        for (var i = 0; i < Craft.sites.length; i++) {
-                            if (Craft.sites[i].id == siteId) {
-                                $('<span class="site"/>').text(Craft.sites[i].name).appendTo($label);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (config.instructions) {
-                    $('<div class="instructions"/>').text(config.instructions).appendTo($heading);
-                }
+            if (config.instructions) {
+                $('<div class="instructions"/>').text(config.instructions).appendTo($field);
             }
 
             $('<div class="input"/>').append(input).appendTo($field);
@@ -793,5 +897,5 @@ Craft.ui =
 
         getDisabledValue: function(disabled) {
             return (disabled ? 'disabled' : null);
-        }
+        },
     };

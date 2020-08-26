@@ -12,8 +12,7 @@ use Codeception\Module\Yii2;
 use Codeception\PHPUnit\TestCase;
 use Codeception\Stub;
 use Codeception\TestInterface;
-use craft\base\Element;
-use craft\base\Field;
+use craft\base\ElementInterface;
 use craft\config\DbConfig;
 use craft\db\Connection;
 use craft\db\Query;
@@ -65,12 +64,9 @@ use yii\db\Exception;
 class Craft extends Yii2
 {
     /**
-     * @var array A static version of the testing config.
-     *
-     * Will be set very early on in the testing processes so it can be used in configuration files such as `general.php` and `test.php`.
-     * This variable is equivalant to calling $this->_getConfig(); but is available for public access.
+     * @var self The current instance
      */
-    public static $testConfig;
+    public static $instance;
 
     /**
      * @var TestInterface
@@ -123,11 +119,22 @@ class Craft extends Yii2
     {
         parent::_initialize();
 
-        $config = $this->_getConfig();
-        Craft::$testConfig = $config;
+        self::$instance = $this;
 
-        if ($config['fullMock'] !== true) {
+        if ($this->_getConfig('fullMock') !== true) {
             $this->setupDb();
+        }
+    }
+
+    /**
+     * @throws YiiBaseErrorException
+     */
+    public function _afterSuite()
+    {
+        parent::_afterSuite();
+
+        if (TestSetup::useProjectConfig()) {
+            TestSetup::removeProjectConfigFolders(CRAFT_CONFIG_PATH . DIRECTORY_SEPARATOR . 'project');
         }
     }
 
@@ -187,7 +194,7 @@ class Craft extends Yii2
             TestSetup::setupProjectConfig();
 
             \Craft::$app->getProjectConfig()->applyConfigChanges(
-                TestSetup::getSeedProjectConfigData(false)
+                TestSetup::getSeedProjectConfigData()
             );
 
             \Craft::$app->getProjectConfig()->saveModifiedConfigData();
@@ -321,11 +328,11 @@ class Craft extends Yii2
     public static function createDbConfig(): DbConfig
     {
         return new DbConfig([
-            'dsn' => getenv('DB_DSN'),
-            'user' => getenv('DB_USER'),
-            'password' => getenv('DB_PASSWORD'),
-            'tablePrefix' => getenv('DB_TABLE_PREFIX'),
-            'schema' => getenv('DB_SCHEMA'),
+            'dsn' => App::env('DB_DSN'),
+            'user' => App::env('DB_USER'),
+            'password' => App::env('DB_PASSWORD'),
+            'tablePrefix' => App::env('DB_TABLE_PREFIX'),
+            'schema' => App::env('DB_SCHEMA'),
         ]);
     }
 
@@ -367,14 +374,14 @@ class Craft extends Yii2
     }
 
     /**
-     * @param Element $element
+     * @param ElementInterface $element
      * @param bool $failHard
      * @return bool
      * @throws ElementNotFoundException
      * @throws Throwable
      * @throws YiiBaseException
      */
-    public function saveElement(Element $element, bool $failHard = true): bool
+    public function saveElement(ElementInterface $element, bool $failHard = true): bool
     {
         if (!\Craft::$app->getElements()->saveElement($element)) {
             if ($failHard) {
@@ -527,7 +534,6 @@ class Craft extends Yii2
             return null;
         }
 
-        /** @var Field $field */
         $layoutId = (new Query())
             ->select(['layoutId'])
             ->from([Table::FIELDLAYOUTFIELDS])

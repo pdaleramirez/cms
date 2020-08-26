@@ -15,7 +15,9 @@ use craft\helpers\FileHelper;
 use craft\helpers\Image as ImageHelper;
 use craft\image\Raster;
 use craft\image\Svg;
+use craft\image\SvgAllowedAttributes;
 use enshrined\svgSanitize\Sanitizer;
+use Imagine\Imagick\Imagick;
 use yii\base\Component;
 use yii\base\Exception;
 
@@ -88,6 +90,8 @@ class Images extends Component
 
     /**
      * Returns the version of the image driver.
+     *
+     * @return string
      */
     public function getVersion(): string
     {
@@ -163,6 +167,16 @@ class Images extends Component
     }
 
     /**
+     * Returns whether the WebP image format is supported.
+     *
+     * @return bool
+     */
+    public function getSupportsWebP(): bool
+    {
+        return $this->getCanUseImagick() ? !empty(Imagick::queryFormats('WEBP')) : function_exists('imagewebp');
+    }
+
+    /**
      * Loads an image from a file system path.
      *
      * @param string $path
@@ -196,7 +210,7 @@ class Images extends Component
      * The code was adapted from http://www.php.net/manual/en/function.imagecreatefromjpeg.php#64155.
      * It will first attempt to do it with available memory. If that fails,
      * Craft will bump the memory to amount defined by the
-     * <config:phpMaxMemoryLimit> config setting, then try again.
+     * <config3:phpMaxMemoryLimit> config setting, then try again.
      *
      * @param string $filePath The path to the image file.
      * @param bool $toTheMax If set to true, will set the PHP memory to the config setting phpMaxMemoryLimit.
@@ -263,6 +277,7 @@ class Images extends Component
             }
 
             $sanitizer = new Sanitizer();
+            $sanitizer->setAllowedAttrs(new SvgAllowedAttributes());
             $svgContents = file_get_contents($filePath);
             $svgContents = $sanitizer->sanitize($svgContents);
 

@@ -8,9 +8,7 @@
 namespace craft\controllers;
 
 use Craft;
-use craft\base\AssetPreviewHandler;
 use craft\base\Element;
-use craft\base\Volume;
 use craft\elements\Asset;
 use craft\errors\AssetException;
 use craft\errors\AssetLogicException;
@@ -36,6 +34,7 @@ use yii\web\ForbiddenHttpException;
 use yii\web\HttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
+use yii\web\ServerErrorHttpException;
 use ZipArchive;
 
 /** @noinspection ClassOverridesFieldOfSuperClassInspection */
@@ -100,7 +99,6 @@ class AssetsController extends Controller
         $this->requireVolumePermissionByAsset('viewVolume', $asset);
         $this->requirePeerVolumePermissionByAsset('viewPeerFilesInVolume', $asset);
 
-        /** @var Volume $volume */
         $volume = $asset->getVolume();
 
         $crumbs = [
@@ -152,6 +150,15 @@ class AssetsController extends Controller
             ($userSession->getId() == $asset->uploaderId || $userSession->checkPermission("replacePeerFilesInVolume:{$volume->uid}"))
         );
 
+        // See if the user is allowed to delete the asset
+        try {
+            $this->requireVolumePermissionByAsset('deleteFilesAndFoldersInVolume', $asset);
+            $this->requirePeerVolumePermissionByAsset('deletePeerFilesInVolume', $asset);
+            $canDelete = true;
+        } catch (ForbiddenHttpException $e) {
+            $canDelete = false;
+        }
+
         if (in_array($asset->kind, [Asset::KIND_IMAGE, Asset::KIND_PDF, Asset::KIND_TEXT])) {
             $assetUrl = $asset->getUrl();
         } else {
@@ -170,6 +177,7 @@ class AssetsController extends Controller
             'dimensions' => $asset->getDimensions(),
             'canReplaceFile' => $canReplaceFile,
             'canEdit' => $asset->getIsEditable(),
+            'canDeleteSource' => $canDelete,
         ]);
     }
 
@@ -183,10 +191,9 @@ class AssetsController extends Controller
     public function actionPreviewThumb(): Response
     {
         $this->requireCpRequest();
-        $request = Craft::$app->getRequest();
-        $assetId = $request->getRequiredParam('assetId');
-        $width = $request->getRequiredParam('width');
-        $height = $request->getRequiredParam('height');
+        $assetId = $this->request->getRequiredParam('assetId');
+        $width = $this->request->getRequiredParam('width');
+        $height = $this->request->getRequiredParam('height');
 
         $asset = Asset::findOne($assetId);
         if ($asset === null) {
@@ -211,9 +218,9 @@ class AssetsController extends Controller
             return $this->runAction('upload');
         }
 
-        $request = Craft::$app->getRequest();
-        $assetId = $request->getRequiredParam('assetId');
-        $siteId = $request->getBodyParam('siteId');
+        $assetId = $this->request->getBodyParam('sourceId') ?? $this->request->getRequiredParam('assetId');
+        $siteId = $this->request->getBodyParam('siteId');
+        $assetVariable = $this->request->getValidatedBodyParam('assetVariable') ?? 'asset';
 
         /** @var Asset|null $asset */
         $asset = Asset::find()
@@ -233,34 +240,34 @@ class AssetsController extends Controller
             $this->requirePermission('editSite:' . $asset->getSite()->uid);
         }
 
-        $asset->title = $request->getParam('title') ?? $asset->title;
-        $asset->newFilename = $request->getParam('filename');
+        $asset->title = $this->request->getParam('title') ?? $asset->title;
+        $asset->newFilename = $this->request->getParam('filename');
 
-        $fieldsLocation = $request->getParam('fieldsLocation') ?? 'fields';
+        $fieldsLocation = $this->request->getParam('fieldsLocation') ?? 'fields';
         $asset->setFieldValuesFromRequest($fieldsLocation);
 
         // Save the asset
         $asset->setScenario(Element::SCENARIO_LIVE);
 
         if (!Craft::$app->getElements()->saveElement($asset)) {
-            if ($request->getAcceptsJson()) {
+            if ($this->request->getAcceptsJson()) {
                 return $this->asJson([
                     'success' => false,
                     'errors' => $asset->getErrors(),
                 ]);
             }
 
-            Craft::$app->getSession()->setError(Craft::t('app', 'Couldn’t save asset.'));
+            $this->setFailFlash(Craft::t('app', 'Couldn’t save asset.'));
 
             // Send the asset back to the template
             Craft::$app->getUrlManager()->setRouteParams([
-                'asset' => $asset
+                $assetVariable => $asset
             ]);
 
             return null;
         }
 
-        if ($request->getAcceptsJson()) {
+        if ($this->request->getAcceptsJson()) {
             return $this->asJson([
                 'success' => true,
                 'id' => $asset->id,
@@ -270,8 +277,7 @@ class AssetsController extends Controller
             ]);
         }
 
-        Craft::$app->getSession()->setNotice(Craft::t('app', 'Asset saved.'));
-
+        $this->setSuccessFlash(Craft::t('app', 'Asset saved.'));
         return $this->redirectToPostedUrl($asset);
     }
 
@@ -285,10 +291,9 @@ class AssetsController extends Controller
     public function actionUpload(): Response
     {
         $uploadedFile = UploadedFile::getInstanceByName('assets-upload');
-        $request = Craft::$app->getRequest();
-        $folderId = $request->getBodyParam('folderId');
-        $fieldId = $request->getBodyParam('fieldId');
-        $elementId = $request->getBodyParam('elementId');
+        $folderId = $this->request->getBodyParam('folderId');
+        $fieldId = $this->request->getBodyParam('fieldId');
+        $elementId = $this->request->getBodyParam('elementId');
 
         if (empty($folderId) && (empty($fieldId) || empty($elementId))) {
             throw new BadRequestHttpException('No target destination provided for uploading');
@@ -333,9 +338,9 @@ class AssetsController extends Controller
             $asset->tempFilePath = $tempPath;
             $asset->filename = $filename;
             $asset->newFolderId = $folder->id;
-            $asset->volumeId = $folder->volumeId;
-            $asset->avoidFilenameConflicts = true;
+            $asset->setVolumeId($folder->volumeId);
             $asset->uploaderId = Craft::$app->getUser()->getId();
+            $asset->avoidFilenameConflicts = true;
             $asset->setScenario(Asset::SCENARIO_CREATE);
 
             $result = Craft::$app->getElements()->saveElement($asset);
@@ -343,7 +348,7 @@ class AssetsController extends Controller
             // In case of error, let user know about it.
             if (!$result) {
                 $errors = $asset->getFirstErrors();
-                return $this->asErrorJson(Craft::t('app', 'Failed to save the Asset:') . implode(";\n", $errors));
+                return $this->asErrorJson(Craft::t('app', 'Failed to save the asset:') . ' ' . implode(";\n", $errors));
             }
 
             if ($asset->conflictingFilename !== null) {
@@ -353,7 +358,9 @@ class AssetsController extends Controller
                     'conflict' => Craft::t('app', 'A file with the name “{filename}” already exists.', ['filename' => $asset->conflictingFilename]),
                     'assetId' => $asset->id,
                     'filename' => $asset->conflictingFilename,
-                    'conflictingAssetId' => $conflictingAsset ? $conflictingAsset->id : null
+                    'conflictingAssetId' => $conflictingAsset ? $conflictingAsset->id : null,
+                    'suggestedFilename' => $asset->suggestedFilename,
+                    'conflictingAssetUrl' => ($conflictingAsset && $conflictingAsset->getVolume()->hasUrls) ? $conflictingAsset->getUrl() : null
                 ]);
             }
 
@@ -379,12 +386,10 @@ class AssetsController extends Controller
     public function actionReplaceFile(): Response
     {
         $this->requireAcceptsJson();
-        $request = Craft::$app->getRequest();
+        $assetId = $this->request->getBodyParam('assetId');
 
-        $assetId = $request->getBodyParam('assetId');
-
-        $sourceAssetId = $request->getBodyParam('sourceAssetId');
-        $targetFilename = $request->getBodyParam('targetFilename');
+        $sourceAssetId = $this->request->getBodyParam('sourceAssetId');
+        $targetFilename = $this->request->getBodyParam('targetFilename');
         $uploadedFile = UploadedFile::getInstanceByName('replaceFile');
 
         $assets = Craft::$app->getAssets();
@@ -410,8 +415,7 @@ class AssetsController extends Controller
             throw new NotFoundHttpException('Asset not found.');
         }
 
-        $this->requireVolumePermissionByAsset('saveAssetInVolume', $assetToReplace ?: $sourceAsset);
-        $this->requireVolumePermissionByAsset('deleteFilesAndFoldersInVolume', $assetToReplace ?: $sourceAsset);
+        $this->requireVolumePermissionByAsset('replaceFilesInVolume', $assetToReplace ?: $sourceAsset);
         $this->requirePeerVolumePermissionByAsset('replacePeerFilesInVolume', $assetToReplace ?: $sourceAsset);
 
         try {
@@ -458,14 +462,16 @@ class AssetsController extends Controller
             return $this->asErrorJson($e->getMessage());
         }
 
+        $resultingAsset = $assetToReplace ?: $sourceAsset;
+
         return $this->asJson([
             'success' => true,
             'assetId' => $assetId,
-            'filename' => $assetToReplace->filename,
-            'formattedSize' => $assetToReplace->getFormattedSize(0),
-            'formattedSizeInBytes' => $assetToReplace->getFormattedSizeInBytes(false),
-            'formattedDateUpdated' => Craft::$app->getFormatter()->asDatetime($assetToReplace->dateUpdated, Formatter::FORMAT_WIDTH_SHORT),
-            'dimensions' => $assetToReplace->getDimensions(),
+            'filename' => $resultingAsset->filename,
+            'formattedSize' => $resultingAsset->getFormattedSize(0),
+            'formattedSizeInBytes' => $resultingAsset->getFormattedSizeInBytes(false),
+            'formattedDateUpdated' => Craft::$app->getFormatter()->asDatetime($resultingAsset->dateUpdated, Formatter::FORMAT_WIDTH_SHORT),
+            'dimensions' => $resultingAsset->getDimensions(),
         ]);
     }
 
@@ -477,11 +483,9 @@ class AssetsController extends Controller
      */
     public function actionCreateFolder(): Response
     {
-        $this->requireLogin();
         $this->requireAcceptsJson();
-        $request = Craft::$app->getRequest();
-        $parentId = $request->getRequiredBodyParam('parentId');
-        $folderName = $request->getRequiredBodyParam('folderName');
+        $parentId = $this->request->getRequiredBodyParam('parentId');
+        $folderName = $this->request->getRequiredBodyParam('folderName');
         $folderName = Assets::prepareAssetName($folderName, false);
 
         $assets = Craft::$app->getAssets();
@@ -524,9 +528,8 @@ class AssetsController extends Controller
      */
     public function actionDeleteFolder(): Response
     {
-        $this->requireLogin();
         $this->requireAcceptsJson();
-        $folderId = Craft::$app->getRequest()->getRequiredBodyParam('folderId');
+        $folderId = $this->request->getRequiredBodyParam('folderId');
 
         $assets = Craft::$app->getAssets();
         $folder = $assets->getFolderById($folderId);
@@ -549,20 +552,20 @@ class AssetsController extends Controller
     /**
      * Delete an Asset.
      *
-     * @return Response
+     * @return Response|null
      * @throws BadRequestHttpException if the folder cannot be found
+     * @throws ForbiddenHttpException
+     * @throws AssetException
      */
-    public function actionDeleteAsset(): Response
+    public function actionDeleteAsset()
     {
-        $this->requireLogin();
-        $this->requireAcceptsJson();
-        $assets = Craft::$app->getAssets();
+        $this->requirePostRequest();
 
-        $assetId = Craft::$app->getRequest()->getRequiredBodyParam('assetId');
-        $asset = $assets->getAssetById($assetId);
+        $assetId = $this->request->getBodyParam('sourceId') ?? $this->request->getRequiredBodyParam('assetId');
+        $asset = Craft::$app->getAssets()->getAssetById($assetId);
 
         if (!$asset) {
-            throw new BadRequestHttpException('The asset cannot be found');
+            throw new BadRequestHttpException("Invalid asset ID: $assetId");
         }
 
         // Check if it's possible to delete objects in the target Volume.
@@ -570,12 +573,35 @@ class AssetsController extends Controller
         $this->requirePeerVolumePermissionByAsset('deletePeerFilesInVolume', $asset);
 
         try {
-            Craft::$app->getElements()->deleteElement($asset);
-        } catch (AssetException $exception) {
-            return $this->asErrorJson($exception->getMessage());
+            $success = Craft::$app->getElements()->deleteElement($asset);
+        } catch (AssetException $e) {
+            if ($this->request->getAcceptsJson()) {
+                return $this->asErrorJson($e->getMessage());
+            }
+            throw $e;
         }
 
-        return $this->asJson(['success' => true]);
+        if (!$success) {
+            if ($this->request->getAcceptsJson()) {
+                return $this->asJson(['success' => false]);
+            }
+
+            $this->setFailFlash(Craft::t('app', 'Couldn’t delete asset.'));
+
+            // Send the entry back to the template
+            Craft::$app->getUrlManager()->setRouteParams([
+                'asset' => $asset
+            ]);
+
+            return null;
+        }
+
+        if ($this->request->getAcceptsJson()) {
+            return $this->asJson(['success' => true]);
+        }
+
+        $this->setSuccessFlash(Craft::t('app', 'Asset deleted.'));
+        return $this->redirectToPostedUrl($asset);
     }
 
     /**
@@ -586,13 +612,11 @@ class AssetsController extends Controller
      */
     public function actionRenameFolder(): Response
     {
-        $this->requireLogin();
         $this->requireAcceptsJson();
 
-        $request = Craft::$app->getRequest();
         $assets = Craft::$app->getAssets();
-        $folderId = $request->getRequiredBodyParam('folderId');
-        $newName = $request->getRequiredBodyParam('newName');
+        $folderId = $this->request->getRequiredBodyParam('folderId');
+        $newName = $this->request->getRequiredBodyParam('newName');
         $folder = $assets->getFolderById($folderId);
 
         if (!$folder) {
@@ -622,14 +646,12 @@ class AssetsController extends Controller
      */
     public function actionMoveAsset(): Response
     {
-        $this->requireLogin();
         $this->requireAcceptsJson();
 
-        $request = Craft::$app->getRequest();
         $assetsService = Craft::$app->getAssets();
 
         // Get the asset
-        $assetId = $request->getRequiredBodyParam('assetId');
+        $assetId = $this->request->getRequiredBodyParam('assetId');
         $asset = $assetsService->getAssetById($assetId);
 
         if (empty($asset)) {
@@ -637,7 +659,7 @@ class AssetsController extends Controller
         }
 
         // Get the target folder
-        $folderId = $request->getBodyParam('folderId', $asset->folderId);
+        $folderId = $this->request->getBodyParam('folderId', $asset->folderId);
         $folder = $assetsService->getFolderById($folderId);
 
         if (empty($folder)) {
@@ -645,7 +667,7 @@ class AssetsController extends Controller
         }
 
         // Get the target filename
-        $filename = $request->getBodyParam('filename', $asset->filename);
+        $filename = $this->request->getBodyParam('filename', $asset->filename);
 
         // Check if it's possible to delete objects in source Volume and save Assets in target Volume.
         $this->requireVolumePermissionByFolder('saveAssetInVolume', $folder);
@@ -653,7 +675,7 @@ class AssetsController extends Controller
         $this->requirePeerVolumePermissionByAsset('editPeerFilesInVolume', $asset);
         $this->requirePeerVolumePermissionByAsset('deletePeerFilesInVolume', $asset);
 
-        if ($request->getBodyParam('force')) {
+        if ($this->request->getBodyParam('force')) {
             // Check for a conflicting Asset
             $conflictingAsset = Asset::find()
                 ->select(['elements.id'])
@@ -695,13 +717,10 @@ class AssetsController extends Controller
      */
     public function actionMoveFolder(): Response
     {
-        $this->requireLogin();
-
-        $request = Craft::$app->getRequest();
-        $folderBeingMovedId = $request->getRequiredBodyParam('folderId');
-        $newParentFolderId = $request->getRequiredBodyParam('parentId');
-        $force = $request->getBodyParam('force', false);
-        $merge = !$force ? $request->getBodyParam('merge', false) : false;
+        $folderBeingMovedId = $this->request->getRequiredBodyParam('folderId');
+        $newParentFolderId = $this->request->getRequiredBodyParam('parentId');
+        $force = $this->request->getBodyParam('force', false);
+        $merge = !$force ? $this->request->getBodyParam('merge', false) : false;
 
         $assets = Craft::$app->getAssets();
         $folderToMove = $assets->getFolderById($folderBeingMovedId);
@@ -813,11 +832,11 @@ class AssetsController extends Controller
      */
     public function actionImageEditor(): Response
     {
-        $assetId = Craft::$app->getRequest()->getRequiredBodyParam('assetId');
+        $assetId = $this->request->getRequiredBodyParam('assetId');
         $asset = Craft::$app->getAssets()->getAssetById($assetId);
 
         if (!$asset) {
-            throw new BadRequestHttpException(Craft::t('app', 'The Asset you’re trying to edit does not exist.'));
+            throw new BadRequestHttpException(Craft::t('app', 'The asset you’re trying to edit does not exist.'));
         }
 
         $focal = $asset->getHasFocalPoint() ? $asset->getFocalPoint() : null;
@@ -835,9 +854,8 @@ class AssetsController extends Controller
      */
     public function actionEditImage(): Response
     {
-        $request = Craft::$app->getRequest();
-        $assetId = (int)$request->getRequiredQueryParam('assetId');
-        $size = (int)$request->getRequiredQueryParam('size');
+        $assetId = (int)$this->request->getRequiredQueryParam('assetId');
+        $size = (int)$this->request->getRequiredQueryParam('size');
 
         $filePath = Assets::getImageEditorSource($assetId, $size);
 
@@ -845,9 +863,7 @@ class AssetsController extends Controller
             throw new BadRequestHttpException('The Asset cannot be found');
         }
 
-        $response = Craft::$app->getResponse();
-
-        return $response->sendFile($filePath, null, ['inline' => true]);
+        return $this->response->sendFile($filePath, null, ['inline' => true]);
     }
 
     /**
@@ -859,22 +875,19 @@ class AssetsController extends Controller
      */
     public function actionSaveImage(): Response
     {
-        $this->requireLogin();
         $this->requireAcceptsJson();
 
         $assets = Craft::$app->getAssets();
-        $request = Craft::$app->getRequest();
-
         try {
-            $assetId = $request->getRequiredBodyParam('assetId');
-            $viewportRotation = (int)$request->getRequiredBodyParam('viewportRotation');
-            $imageRotation = (float)$request->getRequiredBodyParam('imageRotation');
-            $replace = $request->getRequiredBodyParam('replace');
-            $cropData = $request->getRequiredBodyParam('cropData');
-            $focalPoint = $request->getBodyParam('focalPoint');
-            $imageDimensions = $request->getBodyParam('imageDimensions');
-            $flipData = $request->getBodyParam('flipData');
-            $zoom = (float)$request->getBodyParam('zoom', 1);
+            $assetId = $this->request->getRequiredBodyParam('assetId');
+            $viewportRotation = (int)$this->request->getRequiredBodyParam('viewportRotation');
+            $imageRotation = (float)$this->request->getRequiredBodyParam('imageRotation');
+            $replace = $this->request->getRequiredBodyParam('replace');
+            $cropData = $this->request->getRequiredBodyParam('cropData');
+            $focalPoint = $this->request->getBodyParam('focalPoint');
+            $imageDimensions = $this->request->getBodyParam('imageDimensions');
+            $flipData = $this->request->getBodyParam('flipData');
+            $zoom = (float)$this->request->getBodyParam('zoom', 1);
 
             $asset = $assets->getAssetById($assetId);
 
@@ -1001,7 +1014,7 @@ class AssetsController extends Controller
                 $newAsset->tempFilePath = $imageCopy;
                 $newAsset->filename = $asset->filename;
                 $newAsset->newFolderId = $folder->id;
-                $newAsset->volumeId = $folder->volumeId;
+                $newAsset->setVolumeId($folder->volumeId);
                 $newAsset->setFocalPoint($focal);
 
                 // Don't validate required custom fields
@@ -1022,10 +1035,9 @@ class AssetsController extends Controller
      */
     public function actionDownloadAsset(): Response
     {
-        $this->requireLogin();
         $this->requirePostRequest();
 
-        $assetIds = Craft::$app->getRequest()->getRequiredBodyParam('assetId');
+        $assetIds = $this->request->getRequiredBodyParam('assetId');
         $assets = Asset::find()
             ->id($assetIds)
             ->all();
@@ -1042,8 +1054,11 @@ class AssetsController extends Controller
         // If only one asset was selected, send it back unzipped
         if (count($assets) === 1) {
             $asset = reset($assets);
-            return Craft::$app->getResponse()
-                ->sendStreamAsFile($asset->stream, $asset->filename);
+            return $this->response
+                ->sendStreamAsFile($asset->stream, $asset->filename, [
+                    'fileSize' => $asset->size,
+                    'mimeType' => $asset->mimeType,
+                ]);
         }
 
         // Otherwise create a zip of all the selected assets
@@ -1057,14 +1072,13 @@ class AssetsController extends Controller
         App::maxPowerCaptain();
         foreach ($assets as $asset) {
             $localPath = $asset->getCopyOfFile();
-            /** @var Volume $volume */
             $volume = $asset->getVolume();
             $zip->addFile($localPath, $volume->name . '/' . $asset->getPath());
         }
 
         $zip->close();
 
-        return Craft::$app->getResponse()
+        return $this->response
             ->sendFile($zipPath, 'assets.zip');
     }
 
@@ -1114,7 +1128,7 @@ class AssetsController extends Controller
             return $this->asBrokenImage($e);
         }
 
-        return Craft::$app->getResponse()
+        return $this->response
             ->setCacheHeaders()
             ->sendFile($path, $asset->getFilename(), [
                 'inline' => true,
@@ -1127,19 +1141,18 @@ class AssetsController extends Controller
      * @param int|null $transformId
      * @return Response
      * @throws NotFoundHttpException if the transform can't be found
+     * @throws ServerErrorHttpException if the transform can't be generated
      */
     public function actionGenerateTransform(int $transformId = null): Response
     {
-        $request = Craft::$app->getRequest();
-
         // If transform Id was not passed in, see if file id and handle were.
         $assetTransforms = Craft::$app->getAssetTransforms();
 
         if ($transformId) {
             $transformIndexModel = $assetTransforms->getTransformIndexModelById($transformId);
         } else {
-            $assetId = $request->getRequiredBodyParam('assetId');
-            $handle = $request->getRequiredBodyParam('handle');
+            $assetId = $this->request->getRequiredBodyParam('assetId');
+            $handle = $this->request->getRequiredBodyParam('handle');
             $assetModel = Craft::$app->getAssets()->getAssetById($assetId);
             if ($assetModel === null) {
                 throw new BadRequestHttpException('Invalid asset ID: ' . $assetId);
@@ -1151,9 +1164,14 @@ class AssetsController extends Controller
             throw new NotFoundHttpException('Image transform not found.');
         }
 
-        $url = $assetTransforms->ensureTransformUrlByIndexModel($transformIndexModel);
+        try {
+            $url = $assetTransforms->ensureTransformUrlByIndexModel($transformIndexModel);
+        } catch (\Exception $exception) {
+            Craft::$app->getErrorHandler()->logException($exception);
+            throw new ServerErrorHttpException('Image transform cannot be created.');
+        }
 
-        if (Craft::$app->getRequest()->getAcceptsJson()) {
+        if ($this->request->getAcceptsJson()) {
             return $this->asJson(['url' => $url]);
         }
 
@@ -1168,12 +1186,11 @@ class AssetsController extends Controller
      */
     public function actionPreviewFile(): Response
     {
-        $this->requireLogin();
         $this->requirePostRequest();
         $this->requireAcceptsJson();
 
-        $assetId = Craft::$app->getRequest()->getRequiredParam('assetId');
-        $requestId = Craft::$app->getRequest()->getRequiredParam('requestId');
+        $assetId = $this->request->getRequiredParam('assetId');
+        $requestId = $this->request->getRequiredParam('requestId');
 
         $asset = Asset::find()->id($assetId)->one();
 
@@ -1214,7 +1231,7 @@ class AssetsController extends Controller
     protected function asBrokenImage(\Throwable $e = null): Response
     {
         $statusCode = $e instanceof HttpException && $e->statusCode ? $e->statusCode : 500;
-        return Craft::$app->getResponse()
+        return $this->response
             ->sendFile(Craft::getAlias('@app/icons/broken-image.svg'), 'nope.svg', [
                 'mimeType' => 'image/svg+xml',
                 'inline' => true,
@@ -1232,7 +1249,7 @@ class AssetsController extends Controller
      */
     protected function requireVolumePermissionByAsset(string $permissionName, Asset $asset)
     {
-        if (!$asset->volumeId) {
+        if (!$asset->getVolumeId()) {
             $userTemporaryFolder = Craft::$app->getAssets()->getUserTemporaryUploadFolder();
 
             // Skip permission check only if it's the user's temporary folder
@@ -1241,7 +1258,6 @@ class AssetsController extends Controller
             }
         }
 
-        /** @var Volume $volume */
         $volume = $asset->getVolume();
         $this->requireVolumePermission($permissionName, $volume->uid);
     }
@@ -1256,7 +1272,7 @@ class AssetsController extends Controller
      */
     protected function requirePeerVolumePermissionByAsset(string $permissionName, Asset $asset)
     {
-        if ($asset->volumeId) {
+        if ($asset->getVolumeId()) {
             $userId = Craft::$app->getUser()->getId();
             if ($asset->uploaderId != $userId) {
                 $this->requireVolumePermissionByAsset($permissionName, $asset);
@@ -1283,7 +1299,6 @@ class AssetsController extends Controller
             }
         }
 
-        /** @var Volume $volume */
         $volume = $folder->getVolume();
         $this->requireVolumePermission($permissionName, $volume->uid);
     }

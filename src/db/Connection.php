@@ -42,6 +42,8 @@ use yii\db\Exception as DbException;
  */
 class Connection extends \yii\db\Connection
 {
+    use PrimaryReplicaTrait;
+
     const DRIVER_MYSQL = 'mysql';
     const DRIVER_PGSQL = 'pgsql';
 
@@ -109,11 +111,11 @@ class Connection extends \yii\db\Connection
      * Returns the version of the DB.
      *
      * @return string
+     * @deprecated in 3.4.21. Use [[\yii\db\Schema::getServerVersion()]] instead.
      */
     public function getVersion(): string
     {
-        $version = $this->getMasterPdo()->getAttribute(\PDO::ATTR_SERVER_VERSION);
-        return App::normalizeVersion($version);
+        return App::normalizeVersion($this->getSchema()->getServerVersion());
     }
 
     /**
@@ -194,10 +196,17 @@ class Connection extends \yii\db\Connection
     public function getBackupFilePath(): string
     {
         // Determine the backup file path
-        $currentVersion = 'v' . Craft::$app->getVersion();
-        $systemName = FileHelper::sanitizeFilename($this->_getFixedSystemName(), ['asciiOnly' => true]);
-        $filename = ($systemName ? $systemName . '_' : '') . gmdate('ymd_His') . '_' . strtolower(StringHelper::randomString(10)) . '_' . $currentVersion . '.sql';
-        return Craft::$app->getPath()->getDbBackupPath() . '/' . mb_strtolower($filename);
+        $systemName = mb_strtolower(FileHelper::sanitizeFilename($this->_getFixedSystemName(), [
+            'asciiOnly' => true,
+        ]));
+        $filename = ($systemName ? $systemName . '--' : '') . gmdate('Y-m-d-His') . '--v' . Craft::$app->getVersion();
+        $backupPath = Craft::$app->getPath()->getDbBackupPath();
+        $path = $backupPath . '/' . $filename . '.sql';
+        $i = 0;
+        while (file_exists($path)) {
+            $path = $backupPath . '/' . $filename . '--' . ++$i . '.sql';
+        }
+        return $path;
     }
 
     /**
@@ -558,7 +567,7 @@ class Connection extends \yii\db\Connection
 
         // Nuke any temp connection files that might have been created.
         try {
-            FileHelper::clearDirectory(Craft::$app->getPath()->getTempPath(false));
+            @unlink(FileHelper::normalizePath(sys_get_temp_dir()) . DIRECTORY_SEPARATOR . 'my.cnf');
         } catch (InvalidArgumentException $e) {
             // the directory doesn't exist
         }

@@ -1,8 +1,10 @@
 {% extends "_layouts/element" %}
 {% import "_includes/forms" as forms %}
 
+{% set redirectUrl = "assets/#{volume.handle}" %}
 {% set canUpdateSource = canEdit %}
 {% set saveSourceAction = 'assets/save-asset' %}
+{% set deleteSourceAction = 'assets/delete-asset' %}
 
 {% hook "cp.assets.edit" %}
 
@@ -11,34 +13,17 @@
         {% if assetUrl %}
             <a class="btn" href="{{ assetUrl }}" target="_blank" data-icon="preview">{{ 'View'|t('app') }}</a>
         {% endif %}
-        <div id="download-btn" class="btn" role="button" data-icon="download">{{ 'Download'|t('app') }}</div>
+        <button type="button" id="download-btn" class="btn" data-icon="download">{{ 'Download'|t('app') }}</button>
     </div>
 
     {% if canReplaceFile %}
-        <div id="replace-btn" class="btn" role="button" data-icon="upload">{{ 'Replace file'|t('app') }}</div>
+        <button type="button" id="replace-btn" class="btn" data-icon="upload">{{ 'Replace file'|t('app') }}</button>
     {% endif %}
 
     {{ parent() }}
 {% endblock %}
 
 {% block content %}
-    {{ hiddenInput('assetId', element.id) }}
-
-    {{ forms.textField({
-        label: 'Title'|t('app'),
-        siteId: element.siteId,
-        translationDescription: 'This field is translated for each site.'|t('app'),
-        id: 'title',
-        name: 'title',
-        value: element.title,
-        errors: canEdit and element.getErrors('title'),
-        first: true,
-        autofocus: true,
-        required: canEdit,
-        disabled: not canEdit,
-        maxlength: 255
-    }) }}
-
     {{ parent() }}
 
     {# Give plugins a chance to add other things here #}

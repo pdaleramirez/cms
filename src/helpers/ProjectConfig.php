@@ -9,9 +9,13 @@ namespace craft\helpers;
 
 use Craft;
 use craft\services\Fields;
+use craft\services\Gql as GqlService;
 use craft\services\ProjectConfig as ProjectConfigService;
 use craft\services\Sites;
 use craft\services\UserGroups;
+use SebastianBergmann\Diff\Differ;
+use SebastianBergmann\Diff\Output\UnifiedDiffOutputBuilder;
+use Symfony\Component\Yaml\Yaml;
 use yii\base\InvalidConfigException;
 
 /**
@@ -39,6 +43,12 @@ class ProjectConfig
      * @see ensureAllUserGroupsProcessed()
      */
     private static $_processedUserGroups = false;
+
+    /**
+     * @var bool Whether we've already processed all GraphQL schemas.
+     * @see ensureAllGqlSchemasProcessed()
+     */
+    private static $_processedGqlSchemas = false;
 
     /**
      * Ensures all field config changes are processed immediately in a safe manner.
@@ -113,6 +123,28 @@ class ProjectConfig
     }
 
     /**
+     * Ensure all GraphQL schema config changes are processed immediately in a safe manner.
+     */
+    public static function ensureAllGqlSchemasProcessed()
+    {
+        if (static::$_processedGqlSchemas) {
+            return;
+        }
+        static::$_processedGqlSchemas = true;
+
+        $projectConfig = Craft::$app->getProjectConfig();
+        $allSchemas = $projectConfig->get(GqlService::CONFIG_GQL_SCHEMAS_KEY, true);
+
+        if (is_array($allSchemas)) {
+            foreach ($allSchemas as $schemaUid => $schema) {
+                $path = GqlService::CONFIG_GQL_SCHEMAS_KEY . '.';
+                // Ensure schema is processed
+                $projectConfig->processConfigChanges($path . $schemaUid);
+            }
+        }
+    }
+
+    /**
      * Resets the static memoization variables.
      *
      * @return void
@@ -122,6 +154,7 @@ class ProjectConfig
         static::$_processedFields = false;
         static::$_processedSites = false;
         static::$_processedUserGroups = false;
+        static::$_processedGqlSchemas = false;
     }
 
     /**
@@ -226,14 +259,21 @@ class ProjectConfig
                 }
             }
         }
+        unset($value);
 
         // Only pack this array if its keys are not in numerical order
         if (ArrayHelper::isOrdered($array)) {
             return $array;
         }
 
+        // Make sure this isn't already packed
+        if (isset($array[ProjectConfigService::CONFIG_ASSOC_KEY])) {
+            Craft::warning('Attempting to pack an already-packed associative array.');
+            return $array;
+        }
+
         $packed = [];
-        foreach ($array as $key => &$value) {
+        foreach ($array as $key => $value) {
             $packed[] = [$key, $value];
         }
         return [ProjectConfigService::CONFIG_ASSOC_KEY => $packed];
@@ -308,5 +348,116 @@ class ProjectConfig
                 $result[$thisPath] = $value;
             }
         }
+    }
+
+    /**
+     * Take a project config array and split it into components.
+     * Components are defined per each second-level config entry, where all the sibling entries are keyed by UIDs.
+     *
+     * @param array $config
+     * @return array in the form of [$file => $config], where `$file` is the relative config file path in Project Config folder
+     * @since 3.5.0
+     */
+    public static function splitConfigIntoComponents(array $config): array
+    {
+        $splitConfig = [];
+        self::splitConfigIntoComponentsInternal($config, $splitConfig);
+
+        // Store whatever's left in project.yaml
+        $splitConfig[ProjectConfigService::CONFIG_FILENAME] = $config;
+
+        return $splitConfig;
+    }
+
+    /**
+     * Recursively looks for an array of component configs (sub-arrays indexed by UUIDs), within the given config array.
+     *
+     * @param array $config
+     * @param array $splitConfig
+     * @param string|null $path
+     * @return bool whether the config was split
+     */
+    private static function splitConfigIntoComponentsInternal(array &$config, array &$splitConfig, string $path = null): bool
+    {
+        $split = false;
+
+        foreach ($config as $key => $configData) {
+            if (is_array($configData)) {
+                if (self::isComponentArray($configData)) {
+                    foreach ($configData as $uid => $subConfig) {
+                        // Does the sub config specify a handle?
+                        if (isset($subConfig['handle']) && is_string($subConfig['handle']) && preg_match('/^\w+$/', $subConfig['handle'])) {
+                            $filename = "{$subConfig['handle']}--$uid";
+                        } else {
+                            $filename = $uid;
+                        }
+                        $file = ($path ? "$path/" : '') . "$key/$filename.yaml";
+                        $splitConfig[$file] = $subConfig;
+                    }
+                    unset($config[$key]);
+                    $split = true;
+                } else if (ArrayHelper::isAssociative($configData)) {
+                    // Look deeper
+                    $subpath = ($path ? "$path/" : '') . $key;
+                    if (static::splitConfigIntoComponentsInternal($configData, $splitConfig, $subpath)) {
+                        $split = true;
+                        // Store whatever's left in the same folder
+                        if (!empty($configData)) {
+                            $splitConfig["$subpath/$key.yaml"] = $configData;
+                        }
+                        unset($config[$key]);
+                    }
+                }
+            }
+        }
+
+        return $split;
+    }
+
+    /**
+     * Returns whether the given project config item is an array of component configs, where each key is a UUID, and each item is a sub-array.
+     *
+     * @param array $item
+     * @return bool
+     */
+    private static function isComponentArray(array &$item): bool
+    {
+        if (empty($item)) {
+            return false;
+        }
+
+        foreach ($item as $key => $value) {
+            if (!is_array($value) || !is_string($key) || !StringHelper::isUUID($key)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Returns a diff of the pending project config YAML changes, compared to the currently loaded project config.
+     *
+     * @return string
+     * @since 3.5.6
+     */
+    public static function diff(): string
+    {
+        $projectConfig = Craft::$app->getProjectConfig();
+        $currentConfig = $projectConfig->get();
+        $pendingConfig = $projectConfig->get(null, true);
+        $currentYaml = Yaml::dump(static::cleanupConfig($currentConfig), 20, 2);
+        $pendingYaml = Yaml::dump(static::cleanupConfig($pendingConfig), 20, 2);
+        $builder = new UnifiedDiffOutputBuilder('');
+        $differ = new Differ($builder);
+        $diff = $differ->diff($currentYaml, $pendingYaml);
+
+        // Cleanup
+        $diff = preg_replace("/^@@ @@\n/", '', $diff);
+        $diff = preg_replace('/^[\+\-]?/m', '$0 ', $diff);
+        $diff = str_replace(' @@ @@', '...', $diff);
+        $diff = rtrim($diff);
+
+        return $diff;
     }
 }

@@ -9,13 +9,14 @@ namespace craft\web;
 
 use Craft;
 use craft\base\ApplicationTrait;
-use craft\base\Plugin;
 use craft\db\Query;
 use craft\db\Table;
 use craft\debug\DeprecatedPanel;
+use craft\debug\Module as DebugModule;
 use craft\debug\RequestPanel;
 use craft\debug\UserPanel;
 use craft\helpers\ArrayHelper;
+use craft\helpers\Db;
 use craft\helpers\FileHelper;
 use craft\helpers\Path;
 use craft\helpers\UrlHelper;
@@ -26,7 +27,6 @@ use yii\base\InvalidArgumentException;
 use yii\base\InvalidConfigException;
 use yii\base\InvalidRouteException;
 use yii\db\Exception as DbException;
-use yii\debug\Module as DebugModule;
 use yii\debug\panels\AssetPanel;
 use yii\debug\panels\DbPanel;
 use yii\debug\panels\LogPanel;
@@ -38,6 +38,7 @@ use yii\web\ForbiddenHttpException;
 use yii\web\HttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
+use yii\web\UnauthorizedHttpException;
 
 /**
  * Craft Web Application class
@@ -101,6 +102,7 @@ class Application extends \yii\web\Application
         parent::init();
         $this->ensureResourcePathExists();
         $this->_postInit();
+        $this->authenticate();
         $this->debugBootstrap();
     }
 
@@ -161,6 +163,7 @@ class Application extends \yii\web\Application
         $this->_processResourceRequest($request);
 
         $headers = $this->getResponse()->getHeaders();
+        $generalConfig = $this->getConfig()->getGeneral();
 
         // Tell bots not to index/follow CP and tokenized pages
         if ($request->getIsCpRequest() || $request->getToken() !== null) {
@@ -174,7 +177,7 @@ class Application extends \yii\web\Application
         }
 
         // Send the X-Powered-By header?
-        if ($this->getConfig()->getGeneral()->sendPoweredByHeader) {
+        if ($generalConfig->sendPoweredByHeader) {
             $original = $headers->get('X-Powered-By');
             $headers->set('X-Powered-By', $original . ($original ? ',' : '') . $this->name);
         } else {
@@ -209,14 +212,6 @@ class Application extends \yii\web\Application
             throw new ServiceUnavailableHttpException();
         }
 
-        $projectConfig = $this->getProjectConfig();
-
-        // Make sure schema required by config files aligns with what we have.
-        $issues = [];
-        if ($projectConfig->areChangesPending() && !$projectConfig->getAreConfigSchemaVersionsCompatible($issues)) {
-            return $this->_handleIncompatibleConfig($request, $issues);
-        }
-
         // getIsCraftDbMigrationNeeded will return true if we're in the middle of a manual or auto-update for Craft itself.
         // If we're in maintenance mode and it's not a site request, show the manual update template.
         if ($this->getUpdates()->getIsCraftDbMigrationNeeded()) {
@@ -243,11 +238,6 @@ class Application extends \yii\web\Application
             return $this->_processUpdateLogic($request) ?: $this->getResponse();
         }
 
-        // Check if there are any pending changes in project.yaml
-        if ($projectConfig->areChangesPending()) {
-            return $this->_processConfigSyncLogic($request) ?: $this->getResponse();
-        }
-
         // If this is a plugin template request, make sure the user has access to the plugin
         // If this is a non-login, non-validate, non-setPassword CP request, make sure the user has access to the CP
         if (
@@ -256,7 +246,6 @@ class Application extends \yii\web\Application
             ($firstSeg = $request->getSegment(1)) !== null &&
             ($plugin = $this->getPlugins()->getPlugin($firstSeg)) !== null
         ) {
-            /** @var Plugin $plugin */
             $user = $this->getUser();
             if ($user->getIsGuest()) {
                 return $user->loginRequired();
@@ -371,29 +360,64 @@ class Application extends \yii\web\Application
     }
 
     /**
+     * Authenticates the request.
+     *
+     * @throws UnauthorizedHttpException
+     * @since 3.5.0
+     */
+    protected function authenticate()
+    {
+        if (!Craft::$app->getConfig()->getGeneral()->enableBasicHttpAuth) {
+            return;
+        }
+
+        // Did the request include user credentials?
+        list($username, $password) = $this->getRequest()->getAuthCredentials();
+
+        if (!$username || !$password) {
+            return;
+        }
+
+        $user = Craft::$app->getUsers()->getUserByUsernameOrEmail(Db::escapeParam($username));
+
+        if (!$user) {
+            throw new UnauthorizedHttpException('Your request was made with invalid credentials.');
+        }
+
+        if (!$user->authenticate($password)) {
+            throw new UnauthorizedHttpException('Your request was made with invalid credentials.');
+        }
+
+        $this->getUser()->setIdentity($user);
+    }
+
+    /**
      * Bootstraps the Debug Toolbar if necessary.
      */
     protected function debugBootstrap()
     {
-        $session = $this->getSession();
-        if (!$session->getHasSessionId() && !$session->getIsActive()) {
-            return;
-        }
-
         $request = $this->getRequest();
-        if (
-            $request->getIsLivePreview() ||
-            ($request->getIsCpRequest() && !$session->get('enableDebugToolbarForCp')) ||
-            (!$request->getIsCpRequest() && !$session->get('enableDebugToolbarForSite'))
-        ) {
+
+        if ($request->getIsLivePreview() || $request->getIsPreview()) {
             return;
         }
 
-        $svg = rawurlencode(file_get_contents(dirname(__DIR__) . '/icons/c.svg'));
+        $user = $this->getUser()->getIdentity();
+        if (!$user || !$user->admin) {
+            return;
+        }
+
+        $pref = $request->getIsCpRequest() ? 'enableDebugToolbarForCp' : 'enableDebugToolbarForSite';
+        if (!$user->getPreference($pref)) {
+            return;
+        }
+
+        $svg = rawurlencode(file_get_contents(dirname(__DIR__) . '/icons/c-debug.svg'));
         DebugModule::setYiiLogo("data:image/svg+xml;charset=utf-8,{$svg}");
 
         $this->setModule('debug', [
             'class' => DebugModule::class,
+            'basePath' => '@vendor/yiisoft/yii2-debug/src',
             'allowedIPs' => ['*'],
             'panels' => [
                 'config' => false,
@@ -640,76 +664,12 @@ class Application extends \yii\web\Application
             $actionSegments = $request->getActionSegments();
             if (
                 ArrayHelper::firstValue($actionSegments) === 'updater' ||
+                $actionSegments === ['app', 'health-check'] ||
                 $actionSegments === ['app', 'migrate'] ||
                 $actionSegments === ['pluginstore', 'install', 'migrate']
             ) {
                 return $this->runAction(implode('/', $actionSegments));
             }
-        }
-
-        // If an exception gets throw during the rendering of the 503 template, let
-        // TemplatesController->actionRenderError() take care of it.
-        throw new ServiceUnavailableHttpException();
-    }
-
-    /**
-     * @param Request $request
-     * @return Response|null
-     * @throws HttpException
-     * @throws ServiceUnavailableHttpException
-     * @throws \yii\base\ExitException
-     */
-    private function _processConfigSyncLogic(Request $request)
-    {
-        $this->_unregisterDebugModule();
-
-        // Let all non-action CP requests through.
-        if (
-            $request->getIsCpRequest() &&
-            (!$request->getIsActionRequest() || $request->getActionSegments() == ['users', 'login'])
-        ) {
-            // Show the config sync kickoff template
-            return $this->runAction('templates/config-sync-kickoff');
-        }
-
-        // We'll also let update actions go through
-        if ($request->getIsActionRequest()) {
-            $actionSegments = $request->getActionSegments();
-            $firstSegment = ArrayHelper::firstValue($actionSegments);
-            if (
-                $firstSegment === 'updater' ||
-                $firstSegment === 'config-sync' ||
-                $actionSegments === ['app', 'migrate'] ||
-                $actionSegments === ['pluginstore', 'install', 'migrate']
-            ) {
-                return $this->runAction(implode('/', $actionSegments));
-            }
-        }
-
-        // If an exception gets throw during the rendering of the 503 template, let
-        // TemplatesController->actionRenderError() take care of it.
-        throw new ServiceUnavailableHttpException();
-    }
-
-    /**
-     * @param Request $request
-     * @param array $issues An array of schema incompatibility issues
-     * @return Response
-     * @throws HttpException
-     * @throws ServiceUnavailableHttpException
-     * @throws \yii\base\ExitException
-     */
-    private function _handleIncompatibleConfig(Request $request, array $issues): Response
-    {
-        $this->_unregisterDebugModule();
-
-        // Let all non-action CP requests through.
-        if (
-            $request->getIsCpRequest() &&
-            (!$request->getIsActionRequest() || $request->getActionSegments() == ['users', 'login'])
-        ) {
-            // Show the manual update notification template
-            return $this->runAction('templates/incompatible-config-alert', ['issues' => $issues]);
         }
 
         // If an exception gets throw during the rendering of the 503 template, let

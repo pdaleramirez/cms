@@ -40,8 +40,6 @@ class TemplatesController extends Controller
     public $allowAnonymous = [
         'offline' => self::ALLOW_ANONYMOUS_LIVE | self::ALLOW_ANONYMOUS_OFFLINE,
         'manual-update-notification' => self::ALLOW_ANONYMOUS_LIVE | self::ALLOW_ANONYMOUS_OFFLINE,
-        'config-sync-kickoff' => self::ALLOW_ANONYMOUS_LIVE | self::ALLOW_ANONYMOUS_OFFLINE,
-        'incompatible-config-alert' => self::ALLOW_ANONYMOUS_LIVE | self::ALLOW_ANONYMOUS_OFFLINE,
         'requirements-check' => self::ALLOW_ANONYMOUS_LIVE | self::ALLOW_ANONYMOUS_OFFLINE,
         'render-error' => self::ALLOW_ANONYMOUS_LIVE | self::ALLOW_ANONYMOUS_OFFLINE,
     ];
@@ -51,17 +49,16 @@ class TemplatesController extends Controller
      */
     public function beforeAction($action)
     {
-        $request = Craft::$app->getRequest();
-        $actionSegments = $request->getActionSegments();
+        $actionSegments = $this->request->getActionSegments();
         if (isset($actionSegments[0]) && strtolower($actionSegments[0]) === 'templates') {
             throw new ForbiddenHttpException();
         }
 
         if ($action->id === 'render') {
             // Allow anonymous access to the Login template even if the site is offline
-            if ($request->getIsLoginRequest()) {
+            if ($this->request->getIsLoginRequest()) {
                 $this->allowAnonymous = self::ALLOW_ANONYMOUS_LIVE | self::ALLOW_ANONYMOUS_OFFLINE;
-            } else if ($request->getIsSiteRequest()) {
+            } else if ($this->request->getIsSiteRequest()) {
                 $this->allowAnonymous = self::ALLOW_ANONYMOUS_LIVE;
             }
         }
@@ -83,7 +80,7 @@ class TemplatesController extends Controller
         if (
             (
                 Craft::$app->getConfig()->getGeneral()->headlessMode &&
-                Craft::$app->getRequest()->getIsSiteRequest()
+                $this->request->getIsSiteRequest()
             ) ||
             !$this->getView()->doesTemplateExist($template)
         ) {
@@ -106,7 +103,7 @@ class TemplatesController extends Controller
     public function actionOffline(): Response
     {
         // If this is a site request, make sure the offline template exists
-        if (Craft::$app->getRequest()->getIsSiteRequest() && !$this->getView()->doesTemplateExist('offline')) {
+        if ($this->request->getIsSiteRequest() && !$this->getView()->doesTemplateExist('offline')) {
             $templateMode = View::TEMPLATE_MODE_CP;
         }
 
@@ -122,26 +119,6 @@ class TemplatesController extends Controller
     public function actionManualUpdateNotification(): Response
     {
         return $this->renderTemplate('_special/dbupdate');
-    }
-
-    /**
-     * Renders the Project Config Sync kickoff template.
-     *
-     * @return Response
-     */
-    public function actionConfigSyncKickoff(): Response
-    {
-        return $this->renderTemplate('_special/configsync');
-    }
-
-    /**
-     * Renders the incompatible project config alert template.
-     *
-     * @return Response
-     */
-    public function actionIncompatibleConfigAlert(array $issues = []): Response
-    {
-        return $this->renderTemplate('_special/incompatibleconfigs', ['issues' => $issues]);
     }
 
     /**
@@ -162,7 +139,7 @@ class TemplatesController extends Controller
 
         if ($reqCheck->result['summary']['errors'] > 0) {
             // Coming from Updater.php
-            if (Craft::$app->getRequest()->getAcceptsJson()) {
+            if ($this->request->getAcceptsJson()) {
                 $message = '<br /><br />';
 
                 foreach ($reqCheck->getResult()['requirements'] as $req) {
@@ -208,7 +185,7 @@ class TemplatesController extends Controller
             $message = $exception->getMessage();
         }
 
-        if (Craft::$app->getRequest()->getIsSiteRequest()) {
+        if ($this->request->getIsSiteRequest()) {
             $prefix = Craft::$app->getConfig()->getGeneral()->errorTemplatePrefix;
 
             if ($this->getView()->doesTemplateExist($prefix . $statusCode)) {
