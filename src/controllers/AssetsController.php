@@ -25,6 +25,7 @@ use craft\image\Raster;
 use craft\models\VolumeFolder;
 use craft\web\Controller;
 use craft\web\UploadedFile;
+use modules\depotisemodule\DepotiseModule;
 use yii\base\ErrorException;
 use yii\base\Exception;
 use yii\base\NotSupportedException;
@@ -1107,6 +1108,11 @@ class AssetsController extends Controller
      */
     public function actionThumb(string $uid, int $width, int $height): Response
     {
+    	$siteId = DepotiseModule::$app->getSiteIdByReferrer();
+    	if ($siteId !== null) {
+			Craft::$app->sites->setCurrentSite($siteId);
+		}
+
         $asset = Asset::find()->uid($uid)->one();
 
         if (!$asset) {

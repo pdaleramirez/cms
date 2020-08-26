@@ -737,6 +737,13 @@ class AssetTransforms extends Component
 
         $index->setTransform($transform);
 
+        $sites = Craft::$app->elements->getEnabledSiteIdsForElement($index->assetId);
+        if (count($sites) > 0) {
+        	$siteId = $sites[0];
+
+        	Craft::$app->sites->setCurrentSite($siteId);
+		}
+
         $asset = Craft::$app->getAssets()->getAssetById($index->assetId);
         $volume = $asset->getVolume();
         $index->detectedFormat = !empty($index->format) ? $index->format : $this->detectAutoTransformFormat($asset);
